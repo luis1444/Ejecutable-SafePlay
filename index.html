@@ -195,10 +195,10 @@
     @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 
     .modal-content{
-      width:min(480px, 92vw);
+      width:min(640px, 95vw);
       background: rgba(255,255,255,.9);
       border:1px solid var(--sky-200);
-      border-radius:20px; padding:22px;
+      border-radius:20px; padding:28px;
       box-shadow: 0 30px 80px rgba(3,105,161,.25);
       transform: scale(.98);
       animation: pop .2s ease forwards;
@@ -206,58 +206,63 @@
     }
     @keyframes pop{to{transform:scale(1)}}
 
-    .modal-header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px}
-    .modal-title{font-size:1.25rem; font-weight:900; color:#204158}
-    .modal-sub{color:var(--muted); margin-bottom:12px}
+    .modal-header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px}
+    .modal-title{font-size:1.5rem; font-weight:900; color:#204158}
+    .modal-sub{color:var(--muted); margin-bottom:16px; font-size:1.1rem}
 
     .modal-grid{
-      display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:14px 0 8px
+      display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:16px 0 12px
     }
     .field{
-      background:#fff; border:2px solid var(--sky-200); border-radius:12px; padding:10px 12px;
-      display:flex; align-items:center; gap:10px;
+      background:#fff; border:2px solid var(--sky-200); border-radius:12px; padding:12px 14px;
+      display:flex; align-items:center; gap:12px;
       transition: .25s ease;
     }
     .field:focus-within{border-color: var(--sky-400); box-shadow: 0 0 0 6px rgba(56,189,248,.12)}
     .field input{
-      width:100%; border:none; outline:none; font-size:1.1rem; font-weight:800; color:#0b4666
+      width:100%; border:none; outline:none; font-size:1.2rem; font-weight:800; color:#0b4666
     }
-    .modal-actions{display:flex; justify-content:flex-end; gap:10px; margin-top:10px}
+    .modal-actions{display:flex; justify-content:flex-end; gap:12px; margin-top:12px}
 
     .close-btn{
-      background:#fff; border:2px solid #fecaca; color:#7f1d1d; border-radius:12px; padding:10px 14px; cursor:pointer; font-weight:800;
+      background:#fff; border:2px solid #fecaca; color:#7f1d1d; border-radius:12px; padding:12px 16px; cursor:pointer; font-weight:800;
       transition:.2s ease
     }
     .close-btn:hover{background:#ffe4e6}
 
     /* Reaprovechamos tus IDs de botones para no romper JS */
-    #confirmTimerBtn.timer-button{min-width:140px}
-    #cancelTimerBtn.close-btn{min-width:120px}
+    #confirmTimerBtn.timer-button{min-width:160px; padding:12px 16px}
+    #cancelTimerBtn.close-btn{min-width:140px}
 
     /* =========================
        Toasts (mensajes pop-up)
     ==========================*/
     .toast-container{
-      position: fixed; right:20px; bottom:20px; z-index:1200; display:grid; gap:10px;
-      width:min(360px, 92vw)
+      position: fixed; right:20px; bottom:20px; z-index:1200; display:grid; gap:12px;
+      width:min(480px, 92vw)
     }
     .toast{
-      display:flex; gap:10px; align-items:center;
-      background: rgba(255,255,255,.65);
-      border:2px dashed var(--sky-200);
+      background: rgba(255,255,255,.9);
+      border:1px solid var(--sky-200);
       border-left:4px solid var(--sky-500);
-      padding:12px 14px;
-      border-radius:18px;
-      box-shadow: var(--shadow);
+      border-radius:20px;
+      padding:20px;
+      box-shadow: 0 30px 80px rgba(3,105,161,.25);
       animation: slideUp .25s ease, fadeHold 4s ease;
     }
     .toast.success{border-left-color: var(--success)}
     .toast.warn{border-left-color: var(--warning)}
     .toast.error{border-left-color: var(--danger)}
-    .toast-icon{font-size:1.2rem}
-    .toast-content{flex:1}
-    .toast-title{font-weight:800; color:#204158; font-size:.95rem}
-    .toast-body{color:var(--muted); font-size:.85rem}
+    .toast-header{
+      display:flex; align-items:center; justify-content:space-between; margin-bottom:12px
+    }
+    .toast-title{font-weight:900; color:#204158; font-size:1.2rem}
+    .toast-close{
+      background:#fff; border:2px solid #fecaca; color:#7f1d1d; border-radius:10px; padding:6px 10px; cursor:pointer; font-weight:800;
+      transition:.2s ease; font-size:.9rem
+    }
+    .toast-close:hover{background:#ffe4e6}
+    .toast-body{color:var(--muted); font-size:1rem}
     @keyframes slideUp{from{transform: translateY(10px); opacity:0}to{transform:none; opacity:1}}
     @keyframes fadeHold{0%{opacity:0}10%{opacity:1}80%{opacity:1}100%{opacity:0}}
 
@@ -269,7 +274,7 @@
       body{background:linear-gradient(135deg, #0b1722 0%, #0f2331 100%); color:#e8eef4}
       .game-list,.modal-content,.input,.field,.toast{background:#0f1f2b; border-color:#143447}
       .badge{background:linear-gradient(180deg, #0d2a3a, #0a2330); color:#cfe8f7; border-color:#1d5677}
-      .btn-ghost{color:#aee0ff; border-color:#1d5677}
+      .btn-ghost,.toast-close{color:#aee0ff; border-color:#1d5677}
       .toast{background:#0f1f2b; border-color:#143447; color:#e8eef4}
       header{background:rgba(7,19,28,.8)}
     }
@@ -377,15 +382,19 @@
       const el = document.createElement('div');
       el.className = `toast ${type}`;
       el.innerHTML = `
-          <div class="toast-icon">💬</div>
-          <div class="toast-content">
-            <div class="toast-title">${title}</div>
-            ${body ? `<div class="toast-body">${body}</div>` : ``}
-          </div>
-        `;
+        <div class="toast-header">
+          <div class="toast-title">${title}</div>
+          <button class="toast-close" aria-label="Cerrar">Cerrar</button>
+        </div>
+        ${body ? `<div class="toast-body">${body}</div>` : ``}
+      `;
       cont.appendChild(el);
-      setTimeout(()=>{ el.style.opacity='0'; }, 3600);
-      setTimeout(()=>{ el.remove(); }, 4200);
+      el.querySelector('.toast-close')?.addEventListener('click', () => {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 600);
+      });
+      setTimeout(() => { el.style.opacity = '0'; }, 3600);
+      setTimeout(() => { el.remove(); }, 4200);
     };
   })();
 </script>
