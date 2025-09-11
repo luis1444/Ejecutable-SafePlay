@@ -5,6 +5,8 @@ const os = require('os');
 
 let mainWindow;
 let tray;
+let gameTimes = {};   // { gameName: { start: timestamp } }
+let playTimers = {};  // { gameName: timeoutId }
 
 // Función para obtener los juegos activos (solo Steam)
 function getRunningGames() {
@@ -13,7 +15,6 @@ function getRunningGames() {
         let command = '';
 
         if (platform === 'win32') {
-            // Usamos PowerShell porque WMIC está obsoleto
             command = 'powershell "Get-Process | Select-Object ProcessName,Path"';
         } else if (platform === 'darwin' || platform === 'linux') {
             command = 'ps aux';
@@ -29,7 +30,7 @@ function getRunningGames() {
             let games = [];
 
             if (platform === 'win32') {
-                const lines = stdout.split('\n').slice(3); // saltamos cabecera
+                const lines = stdout.split('\n').slice(3);
                 for (let line of lines) {
                     line = line.trim();
                     if (!line) continue;
@@ -40,7 +41,6 @@ function getRunningGames() {
                     const exeName = parts[0];
                     const exePath = parts[1];
 
-                    // 🔑 Solo mostrar procesos que vienen de carpetas de juegos Steam
                     if (exePath && exePath.toLowerCase().includes('steamapps\\common')) {
                         games.push({
                             name: exeName.replace('.exe', ''),
@@ -49,7 +49,6 @@ function getRunningGames() {
                     }
                 }
 
-                // 🔑 Eliminar duplicados: un juego = un proceso principal
                 const uniqueGames = {};
                 games.forEach(game => {
                     const folder = path.dirname(game.path);
@@ -60,7 +59,6 @@ function getRunningGames() {
 
                 games = Object.values(uniqueGames);
             } else {
-                // En Linux/Mac: buscamos procesos de Steam
                 const lines = stdout.split('\n').slice(1);
                 lines.forEach(line => {
                     if (!line.trim()) return;
@@ -73,7 +71,6 @@ function getRunningGames() {
                 });
             }
 
-            console.log('Juegos principales detectados:', games);
             resolve(games);
         });
     });
@@ -87,14 +84,14 @@ function createWindow() {
         icon: path.join(__dirname, 'assets', 'icon.png'),
         webPreferences: {
             nodeIntegration: true,
-            contextIsolation: false // 🔑 activado para que ipcRenderer funcione
+            contextIsolation: false
         }
     });
 
     mainWindow.loadFile('index.html');
 }
 
-// Función para crear el icono en la bandeja
+// Crear icono en la bandeja
 function createTray() {
     tray = new Tray(path.join(__dirname, 'assets', 'tray-icon.png'));
     const contextMenu = Menu.buildFromTemplate([
@@ -109,49 +106,89 @@ function createTray() {
     tray.setContextMenu(contextMenu);
 }
 
-// Función para bloquear el juego
-ipcMain.on('block-game', (event, gameName) => {
-    console.log(`Intentando bloquear: ${gameName}`);
+// 🔹 Bloquear un juego
+function killGame(gameName) {
     const platform = os.platform();
     let command = '';
 
     if (platform === 'win32') {
         command = `taskkill /IM "${gameName}.exe" /F`;
-    } else if (platform === 'darwin' || platform === 'linux') {
+    } else {
         command = `pkill -f ${gameName}`;
     }
 
     exec(command, (error, stdout, stderr) => {
         if (error) {
             console.error(`Error al cerrar el juego: ${stderr}`);
+            mainWindow.webContents.send('game-blocked', {
+                name: gameName,
+                success: false,
+                message: `❌ No se pudo cerrar ${gameName}.`
+            });
         } else {
             console.log(`Juego bloqueado: ${stdout}`);
+            mainWindow.webContents.send('game-blocked', {
+                name: gameName,
+                success: true,
+                message: `✅ Juego cerrado: ${gameName}`
+            });
         }
     });
+}
+
+// Evento manual
+ipcMain.on('block-game', (event, gameName) => {
+    killGame(gameName);
 });
 
-// Inicializa la aplicación
+// ⏱️ Establecer tiempo límite para un juego
+ipcMain.on("set-playtime", (event, { gameName, minutes }) => {
+    console.log(`⏱️ Tiempo de juego configurado para ${gameName}: ${minutes} minutos`);
+
+    if (playTimers[gameName]) {
+        clearTimeout(playTimers[gameName]);
+    }
+
+    playTimers[gameName] = setTimeout(() => {
+        console.log(`⏰ Tiempo terminado para ${gameName}. Cerrando...`);
+        killGame(gameName);
+        mainWindow.webContents.send("time-up", gameName);
+    }, minutes * 60 * 1000);
+});
+
+// Inicializar app
 app.whenReady().then(() => {
     createWindow();
     createTray();
     setInterval(() => {
         getRunningGames().then(games => {
-            console.log('Enviando juegos al frontend:', games);
-            mainWindow.webContents.send('update-game-list', games);
+            const now = Date.now();
+
+            games.forEach(gameName => {
+                if (!gameTimes[gameName]) {
+                    gameTimes[gameName] = { start: now };
+                }
+            });
+
+            const gamesWithTime = games.map(gameName => {
+                const start = gameTimes[gameName]?.start || now;
+                const elapsed = Math.floor((now - start) / 1000);
+                return { name: gameName, elapsed };
+            });
+
+            mainWindow.webContents.send('update-game-list', gamesWithTime);
         }).catch(err => {
             console.error('Error al obtener los juegos:', err);
         });
-    }, 5000); // Actualizar cada 5 segundos
+    }, 5000);
 });
 
-// Cierra la app cuando todas las ventanas están cerradas
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit();
     }
 });
 
-// Vuelve a crear la ventana en Mac si es necesario
 app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
         createWindow();

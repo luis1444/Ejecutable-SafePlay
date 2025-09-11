@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -7,25 +8,84 @@
   <style>
     .game-item {
       margin: 10px 0;
-      padding: 5px;
+      padding: 10px;
       border: 1px solid #ccc;
+      border-radius: 8px;
     }
-    .block-button {
+    .block-button, .timer-button {
       margin-left: 10px;
       padding: 5px 10px;
-      background-color: #ff4444;
-      color: white;
       border: none;
       cursor: pointer;
+      border-radius: 5px;
+    }
+    .block-button {
+      background-color: #ff4444;
+      color: white;
     }
     .block-button:hover {
       background-color: #cc0000;
+    }
+    .timer-button {
+      background-color: #007bff;
+      color: white;
+    }
+    .timer-button:hover {
+      background-color: #0056b3;
+    }
+
+    /* 🔹 Modal */
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      left: 0; top: 0;
+      width: 100%; height: 100%;
+      background: rgba(0,0,0,0.5);
+    }
+    .modal-content {
+      background: #fff;
+      padding: 20px;
+      border-radius: 10px;
+      max-width: 400px;
+      margin: 10% auto;
+      text-align: center;
+    }
+    .modal input {
+      padding: 5px;
+      margin: 10px;
+      width: 80px;
+    }
+    .close-btn {
+      background: #ff4444;
+      color: white;
+      border: none;
+      padding: 5px 10px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .close-btn:hover {
+      background: #cc0000;
     }
   </style>
 </head>
 <body>
 <h1>Monitor de Juegos</h1>
 <div id="gameListContainer">Cargando juegos...</div>
+
+<!-- 🔹 Modal -->
+<div id="timerModal" class="modal">
+  <div class="modal-content">
+    <h2>⏱️ Establecer tiempo de juego</h2>
+    <p id="modalGameName"></p>
+    <input type="number" id="hoursInput" placeholder="Horas" min="0">
+    <input type="number" id="minutesInput" placeholder="Minutos" min="1">
+    <br>
+    <button id="confirmTimerBtn" class="timer-button">Aceptar</button>
+    <button id="cancelTimerBtn" class="close-btn">Cancelar</button>
+  </div>
+</div>
+
 <script src="renderer.js"></script>
 </body>
 </html>
