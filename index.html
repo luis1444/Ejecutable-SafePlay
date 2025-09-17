@@ -307,10 +307,7 @@
 
   <!-- Contenido -->
   <div id="gameListContainer">
-    <!-- Tu renderer.js puede inyectar:
-         - un div.empty mientras carga
-         - o un div .game-list con items .game-item
-    -->
+    <!-- El contenido se actualizará aquí desde renderer.js -->
     <div class="empty">
       <span class="spinner"></span> Cargando juegos…
     </div>
@@ -329,11 +326,11 @@
     <div class="modal-grid">
       <label class="field" for="hoursInput">
         <span>🕒</span>
-        <input type="number" id="hoursInput" placeholder="Horas" min="0" inputmode="numeric"/>
+        <input type="text" id="hoursInput" placeholder="Horas" maxlength="2" inputmode="numeric"/>
       </label>
       <label class="field" for="minutesInput">
         <span>⌛</span>
-        <input type="number" id="minutesInput" placeholder="Minutos" min="1" inputmode="numeric"/>
+        <input type="text" id="minutesInput" placeholder="Minutos" maxlength="2" inputmode="numeric"/>
       </label>
     </div>
 
@@ -343,60 +340,44 @@
   </div>
 </div>
 
-<!-- Toasts -->
-<div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
-
 <script src="renderer.js"></script>
 
 <script>
-  // Helpers opcionales (no rompen tu lógica): abrir/cerrar modal y toasts.
-  // Si ya manejas esto en renderer.js, puedes ignorarlos o usarlos de referencia.
+  const { ipcRenderer } = require('electron');
 
-  // Modal helpers (respetando tus IDs existentes)
-  (function(){
-    const modal = document.getElementById('timerModal');
-    const cancel = document.getElementById('cancelTimerBtn');
+  // Botón de "Establecer tiempo"
+  const confirmTimerBtn = document.getElementById("confirmTimerBtn");
 
-    function openModal(){
-      modal.classList.add('is-open');
-      modal.setAttribute('aria-hidden','false');
-    }
-    function closeModal(){
-      modal.classList.remove('is-open');
-      modal.setAttribute('aria-hidden','true');
+  confirmTimerBtn.addEventListener("click", () => {
+    const hours = parseInt(document.getElementById('hoursInput').value) || 0;
+    const minutes = parseInt(document.getElementById('minutesInput').value) || 0;
+    const totalMinutes = (hours * 60) + minutes;
+
+    if (totalMinutes <= 0) {
+        alert("⚠️ Ingresa un tiempo válido.");
+        return;
     }
 
-    // Expo mínima para que renderer.js pueda invocar
-    window.__openTimerModal = openModal;
-    window.__closeTimerModal = closeModal;
+    // Enviar el tiempo configurado al main process
+    ipcRenderer.send("set-playtime", { gameName: currentGameForTimer, minutes: totalMinutes });
 
-    cancel?.addEventListener('click', closeModal);
-    modal?.addEventListener('click', (e)=>{ if(e.target === modal) closeModal(); });
-    document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); });
-  })();
+    // Deshabilitar el botón y ponerlo borroso después de hacer clic
+    confirmTimerBtn.disabled = true;
+    confirmTimerBtn.classList.add("disabled-button");
+    confirmTimerBtn.textContent = "Tiempo Establecido";  // Cambiar el texto
 
-  // Toast helpers: window.toast('ok','Título','mensaje')
-  (function(){
-    const cont = document.getElementById('toastContainer');
-    window.toast = function(type='success', title='Hecho', body=''){
-      const el = document.createElement('div');
-      el.className = `toast ${type}`;
-      el.innerHTML = `
-        <div class="toast-header">
-          <div class="toast-title">${title}</div>
-          <button class="toast-close" aria-label="Cerrar">Cerrar</button>
-        </div>
-        ${body ? `<div class="toast-body">${body}</div>` : ``}
-      `;
-      cont.appendChild(el);
-      el.querySelector('.toast-close')?.addEventListener('click', () => {
-        el.style.opacity = '0';
-        setTimeout(() => el.remove(), 600);
-      });
-      setTimeout(() => { el.style.opacity = '0'; }, 3600);
-      setTimeout(() => { el.remove(); }, 4200);
-    };
-  })();
+    // Cerrar el modal
+    document.getElementById("timerModal").style.display = "none";
+
+    alert(`⏱️ Tiempo establecido para ${currentGameForTimer}: ${totalMinutes} minutos`);
+  });
+
+  // Cerrar el modal cuando se presione el botón de cancelar
+  const cancelTimerBtn = document.getElementById("cancelTimerBtn");
+  cancelTimerBtn.addEventListener("click", () => {
+    document.getElementById("timerModal").style.display = "none";
+  });
 </script>
+
 </body>
 </html>

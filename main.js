@@ -119,15 +119,40 @@ function killGame(gameName) {
 }
 
 ipcMain.on('block-game', (event, gameName) => {
+    // Detener el temporizador cuando el juego se bloquea
+    if (playTimers[gameName]) {
+        clearTimeout(playTimers[gameName]);
+        delete playTimers[gameName];
+    }
+    // Eliminar el juego de gameTimes cuando se bloquea
+    delete gameTimes[gameName];
     killGame(gameName);
 });
 
 ipcMain.on("set-playtime", (event, { gameName, minutes }) => {
-    if (playTimers[gameName]) clearTimeout(playTimers[gameName]);
+    // Detener el temporizador anterior si existe
+    if (playTimers[gameName]) {
+        clearTimeout(playTimers[gameName]);
+        delete playTimers[gameName];
+    }
+
+    // Reiniciar el tiempo del juego a la hora actual (esto reinicia el contador)
+    gameTimes[gameName] = { start: Date.now() };
+
+    // Establecer un nuevo temporizador para el juego
     playTimers[gameName] = setTimeout(() => {
-        killGame(gameName);
+        killGame(gameName);  // Bloquear el juego cuando termine el tiempo
         mainWindow.webContents.send("time-up", gameName);
-    }, minutes * 60 * 1000);
+    }, minutes * 60 * 1000);  // Convertir minutos a milisegundos
+
+    // Enviar al renderizador el tiempo establecido
+    mainWindow.webContents.send("playtime-set", { gameName, minutes });
+});
+
+ipcMain.on('game-unblocked', (event, gameName) => {
+    // Reiniciar el tiempo del juego al momento del desbloqueo
+    gameTimes[gameName] = { start: Date.now() }; // Reiniciar el temporizador a la fecha actual
+    mainWindow.webContents.send('game-unblocked', gameName);
 });
 
 app.whenReady().then(() => {
@@ -139,6 +164,7 @@ app.whenReady().then(() => {
             const now = Date.now();
 
             games.forEach(gameName => {
+                // Si el juego no está bloqueado, iniciar su tiempo
                 if (!gameTimes[gameName]) {
                     gameTimes[gameName] = { start: now };
                 }
@@ -147,7 +173,7 @@ app.whenReady().then(() => {
             // Enviar start times al renderer
             const gamesWithStart = games.map(gameName => ({
                 name: gameName,
-                start: gameTimes[gameName].start
+                start: gameTimes[gameName]?.start || 0
             }));
 
             mainWindow.webContents.send('update-game-list', gamesWithStart);
