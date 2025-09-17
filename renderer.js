@@ -10,20 +10,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const cancelTimerBtn = document.getElementById("cancelTimerBtn");
 
     let currentGameForTimer = null;
+    let activeGames = {};
 
-    ipcRenderer.on('update-game-list', (event, games) => {
+    function renderGames() {
         gameListContainer.innerHTML = '';
 
-        if (!games || games.length === 0) {
+        const now = Date.now();
+        const gameEntries = Object.entries(activeGames);
+
+        if (gameEntries.length === 0) {
             const noGamesMessage = document.createElement('p');
             noGamesMessage.textContent = 'No se encontraron juegos activos.';
             gameListContainer.appendChild(noGamesMessage);
             return;
         }
 
-        games.forEach(game => {
-            const gameName = game.name;
-            const elapsedSeconds = game.elapsed;
+        gameEntries.forEach(([gameName, start]) => {
+            const elapsedSeconds = Math.floor((now - start) / 1000);
             const friendlyName = gameName.replace('.exe', '');
 
             const hours = Math.floor(elapsedSeconds / 3600);
@@ -33,7 +36,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const gameElement = document.createElement('div');
             gameElement.classList.add('game-item');
-
             gameElement.innerHTML = `
                 <div>
                     <strong>${friendlyName}</strong> - Jugando<br>
@@ -46,37 +48,39 @@ document.addEventListener('DOMContentLoaded', () => {
             const blockButton = gameElement.querySelector('.block-button');
             const timerButton = gameElement.querySelector('.timer-button');
 
-            if (blockButton) {
-                blockButton.addEventListener('click', () => {
-                    ipcRenderer.send('block-game', gameName);
-                });
-            }
+            blockButton.addEventListener('click', () => {
+                ipcRenderer.send('block-game', gameName);
+            });
 
-            if (timerButton) {
-                timerButton.addEventListener('click', () => {
-                    currentGameForTimer = gameName;
-                    modalGameName.textContent = `Juego: ${friendlyName}`;
-                    hoursInput.value = "";
-                    minutesInput.value = "";
-                    timerModal.style.display = "block";
-                });
-            }
+            timerButton.addEventListener('click', () => {
+                currentGameForTimer = gameName;
+                modalGameName.textContent = `Juego: ${friendlyName}`;
+                hoursInput.value = "";
+                minutesInput.value = "";
+                timerModal.style.display = "block";
+            });
 
             gameListContainer.appendChild(gameElement);
         });
+    }
+
+    // Actualiza tiempos cada segundo
+    setInterval(renderGames, 1000);
+
+    ipcRenderer.on('update-game-list', (event, games) => {
+        activeGames = {};
+        games.forEach(g => activeGames[g.name] = g.start);
+        renderGames();
     });
 
-    // Confirmar tiempo
     confirmTimerBtn.addEventListener("click", () => {
         const hours = parseInt(hoursInput.value) || 0;
         const minutes = parseInt(minutesInput.value) || 0;
         const totalMinutes = (hours * 60) + minutes;
-
         if (totalMinutes <= 0) {
             alert("⚠️ Ingresa un tiempo válido.");
             return;
         }
-
         ipcRenderer.send("set-playtime", { gameName: currentGameForTimer, minutes: totalMinutes });
         alert(`⏱️ Tiempo establecido: ${totalMinutes} min`);
         timerModal.style.display = "none";
@@ -86,11 +90,8 @@ document.addEventListener('DOMContentLoaded', () => {
         timerModal.style.display = "none";
     });
 
-    // Cerrar con clic afuera
     window.onclick = (event) => {
-        if (event.target === timerModal) {
-            timerModal.style.display = "none";
-        }
+        if (event.target === timerModal) timerModal.style.display = "none";
     };
 
     ipcRenderer.on('game-blocked', (event, result) => {
