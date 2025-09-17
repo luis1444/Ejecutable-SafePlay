@@ -59,10 +59,10 @@ function renderGames() {
             minutesInput.value = "";
             timerModal.style.display = "block";
 
-            // Deshabilitar el botón después de hacer clic una vez
+            // Deshabilitar el botón de timer después de hacer clic una vez
             timerButton.disabled = true;  // Deshabilitar el botón
-            timerButton.classList.add("disabled-button");  // Hacerlo visualmente inactivo
-            timerButton.textContent = "Tiempo Establecido";  // Opcional: cambiar el texto
+            timerButton.classList.add("disabled-button");  // Visualmente inactivo
+            timerButton.textContent = "Tiempo Establecido";  // Cambiar texto para mayor claridad
         });
 
         gameListContainer.appendChild(gameElement);
@@ -94,23 +94,36 @@ ipcRenderer.on('game-unblocked', (event, gameName) => {
     renderGames();
 });
 
+// Manejo de la confirmación del tiempo
 confirmTimerBtn.addEventListener("click", () => {
     const hours = parseInt(hoursInput.value) || 0;
     const minutes = parseInt(minutesInput.value) || 0;
     const totalMinutes = (hours * 60) + minutes;
+
     if (totalMinutes <= 0) {
         alert("⚠️ Ingresa un tiempo válido.");
         return;
     }
+
     ipcRenderer.send("set-playtime", { gameName: currentGameForTimer, minutes: totalMinutes });
     alert(`⏱️ Tiempo establecido para ${currentGameForTimer}: ${totalMinutes} minutos`);
     timerModal.style.display = "none";
+
+    // Habilitar el botón de timer nuevamente en el futuro si el juego es desbloqueado
+    const timerButton = document.getElementById(`timerButton-${currentGameForTimer}`);
+    if (timerButton) {
+        timerButton.disabled = false;
+        timerButton.classList.remove("disabled-button");
+        timerButton.textContent = "Establecer tiempo";
+    }
 });
 
+// Cancelar el timer y cerrar el modal
 cancelTimerBtn.addEventListener("click", () => {
     timerModal.style.display = "none";
 });
 
+// Cerrar el modal si se hace clic fuera de él
 window.onclick = (event) => {
     if (event.target === timerModal) timerModal.style.display = "none";
 };
