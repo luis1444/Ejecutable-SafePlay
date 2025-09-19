@@ -1,12 +1,22 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu } = require('electron');
+// main.js
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
 const os = require('os');
+const AuthService = require('./authService');
 
 let mainWindow;
+let overlayWindow;
 let tray;
 let gameTimes = {};   // { gameName: { start: timestamp } }
-let playTimers = {};  // { gameName: timeoutId }
+
+// Ahora almacenamos ambos timers por juego
+// playTimers[gameName] = { kill: Timeout, warn: Timeout }
+let playTimers = {};
+
+// Anti-dup de overlays (evita spam accidental)
+let lastOverlayKey = '';
+let lastOverlayTs = 0;
 
 function getRunningGames() {
     return new Promise((resolve, reject) => {
@@ -48,11 +58,8 @@ function getRunningGames() {
                 const uniqueGames = {};
                 games.forEach(game => {
                     const folder = path.dirname(game.path);
-                    if (!uniqueGames[folder]) {
-                        uniqueGames[folder] = game.name;
-                    }
+                    if (!uniqueGames[folder]) uniqueGames[folder] = game.name;
                 });
-
                 games = Object.values(uniqueGames);
             } else {
                 const lines = stdout.split('\n').slice(1);
@@ -74,8 +81,8 @@ function getRunningGames() {
 
 function createWindow() {
     mainWindow = new BrowserWindow({
-        width: 800,
-        height: 600,
+        width: 980,
+        height: 700,
         icon: path.join(__dirname, 'assets', 'icon.png'),
         webPreferences: {
             nodeIntegration: true,
@@ -83,7 +90,52 @@ function createWindow() {
         }
     });
 
-    mainWindow.loadFile('index.html');
+    // [AUTH]
+    AuthService.getSession().then(sess => {
+        if (sess) mainWindow.loadFile('index.html');
+        else mainWindow.loadFile('login.html');
+    });
+
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+    });
+}
+
+function createOverlayWindow() {
+    if (overlayWindow && !overlayWindow.isDestroyed()) return;
+
+    overlayWindow = new BrowserWindow({
+        width: 800,
+        height: 600,
+        frame: false,
+        transparent: true,
+        resizable: false,
+        movable: false,
+        show: false,
+        focusable: false,
+        skipTaskbar: true,
+        hasShadow: false,
+        backgroundColor: '#00000000',
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false
+        }
+    });
+
+    overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+    overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    overlayWindow.fullScreenable = false;
+
+    // Click-through por defecto
+    try {
+        overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+    } catch (_) {}
+
+    overlayWindow.loadFile('overlay.html').catch(() => {});
+
+    overlayWindow.on('closed', () => {
+        overlayWindow = null;
+    });
 }
 
 function createTray() {
@@ -95,6 +147,40 @@ function createTray() {
     tray.setContextMenu(contextMenu);
 }
 
+function safeOverlayBounds() {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return;
+    const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+    overlayWindow.setBounds({ x: 0, y: 0, width, height });
+}
+
+function clearOverlay() {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return;
+    try {
+        overlayWindow.webContents.send('overlay:clear');
+    } catch (_) {}
+}
+
+function showOverlay(payload) {
+    const key = `${payload?.variant || ''}|${payload?.title || ''}|${payload?.body || ''}`;
+    const now = Date.now();
+    if (key === lastOverlayKey && now - lastOverlayTs < 1000) return;
+    lastOverlayKey = key;
+    lastOverlayTs = now;
+
+    createOverlayWindow();
+    if (!overlayWindow || overlayWindow.isDestroyed()) return;
+
+    clearOverlay();
+    safeOverlayBounds();
+
+    if (!overlayWindow.isVisible()) {
+        try { overlayWindow.showInactive(); } catch (_) {}
+    }
+    try {
+        overlayWindow.webContents.send('overlay:show', payload);
+    } catch (_) {}
+}
+
 function killGame(gameName) {
     const platform = os.platform();
     let command = platform === 'win32'
@@ -103,82 +189,197 @@ function killGame(gameName) {
 
     exec(command, (error) => {
         if (error) {
-            mainWindow.webContents.send('game-blocked', {
-                name: gameName,
-                success: false,
-                message: `❌ No se pudo cerrar ${gameName}.`
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('game-blocked', {
+                    name: gameName,
+                    success: false,
+                    message: `❌ No se pudo cerrar ${gameName}.`
+                });
+            }
+            showOverlay({
+                variant: 'error',
+                title: 'No se pudo cerrar el juego',
+                body: `Intento fallido al cerrar <b>${gameName}</b>.`,
+                duration: 5000
             });
         } else {
-            mainWindow.webContents.send('game-blocked', {
-                name: gameName,
-                success: true,
-                message: `✅ Juego cerrado: ${gameName}`
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('game-blocked', {
+                    name: gameName,
+                    success: true,
+                    message: `✅ Juego cerrado: ${gameName}`
+                });
+            }
+            showOverlay({
+                variant: 'success',
+                title: 'Juego cerrado',
+                body: `Se cerró <b>${gameName}</b> por límite o bloqueo.`,
+                duration: 4500
             });
         }
     });
 }
 
-ipcMain.on('block-game', (event, gameName) => {
-    // Detener el temporizador cuando el juego se bloquea
-    if (playTimers[gameName]) {
-        clearTimeout(playTimers[gameName]);
-        delete playTimers[gameName];
+// Helpers para timers de cada juego
+function clearGameTimers(gameName) {
+    const t = playTimers[gameName];
+    if (!t) return;
+    try { if (t.kill) clearTimeout(t.kill); } catch(_) {}
+    try { if (t.warn) clearTimeout(t.warn); } catch(_) {}
+    delete playTimers[gameName];
+}
+
+// === IPC AUTH ===
+ipcMain.handle('auth:login', async (_evt, { email, password }) => {
+    try {
+        const { token, user } = await AuthService.login({ email, password });
+        return { ok: true, user };
+    } catch (err) {
+        return { ok: false, message: err?.message || 'Error de autenticación' };
     }
-    // Eliminar el juego de gameTimes cuando se bloquea
+});
+
+ipcMain.handle('auth:getSession', async () => {
+    const sess = await AuthService.getSession();
+    return { ok: !!sess, session: sess || null };
+});
+
+ipcMain.handle('auth:logout', async () => {
+    await AuthService.logout();
+    return { ok: true };
+});
+
+// Overlay hover toggle
+ipcMain.on('overlay:hover', (_evt, isHovering) => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) return;
+    try {
+        overlayWindow.setIgnoreMouseEvents(!isHovering, { forward: true });
+    } catch (_) {}
+});
+
+// Exponer overlay (si alguna vez quieres llamarlo desde renderer)
+ipcMain.handle('overlay:show', (_evt, payload) => {
+    showOverlay(payload || {});
+    return { ok: true };
+});
+ipcMain.handle('overlay:clear', () => {
+    clearOverlay();
+    return { ok: true };
+});
+
+// === IPC Juegos ===
+ipcMain.on('block-game', (_event, gameName) => {
+    clearGameTimers(gameName);
     delete gameTimes[gameName];
     killGame(gameName);
 });
 
-ipcMain.on("set-playtime", (event, { gameName, minutes }) => {
-    // Detener el temporizador anterior si existe
-    if (playTimers[gameName]) {
-        clearTimeout(playTimers[gameName]);
-        delete playTimers[gameName];
-    }
+ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
+    // Limpia timers previos
+    clearGameTimers(gameName);
 
-    // Reiniciar el tiempo del juego a la hora actual (esto reinicia el contador)
+    // (Re)inicia el temporizador del juego
     gameTimes[gameName] = { start: Date.now() };
 
-    // Establecer un nuevo temporizador para el juego
-    playTimers[gameName] = setTimeout(() => {
-        killGame(gameName);  // Bloquear el juego cuando termine el tiempo
-        mainWindow.webContents.send("time-up", gameName);
-    }, minutes * 60 * 1000);  // Convertir minutos a milisegundos
+    const totalMs = minutes * 60 * 1000;
+    const warnOffset = 30 * 1000;
 
-    // Enviar al renderizador el tiempo establecido
-    mainWindow.webContents.send("playtime-set", { gameName, minutes });
+    // Timer de aviso 30s antes, solo si hay tiempo suficiente
+    if (totalMs > warnOffset) {
+        const warnTimer = setTimeout(() => {
+            try {
+                showOverlay({
+                    variant: 'warn',
+                    title: 'Aviso: cierre inminente',
+                    body: `El juego <b>${gameName}</b> se cerrará en <b>30 segundos</b> por límite de tiempo.`,
+                    duration: 6000
+                });
+            } catch (_) {}
+        }, totalMs - warnOffset);
+
+        // Guardar
+        playTimers[gameName] = { ...(playTimers[gameName] || {}), warn: warnTimer };
+    }
+
+    // Timer de cierre
+    const killTimer = setTimeout(() => {
+        try {
+            killGame(gameName);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send("time-up", gameName);
+            }
+            showOverlay({
+                variant: 'warn',
+                title: 'Tiempo de juego agotado',
+                body: `El tiempo de <b>${gameName}</b> se ha cumplido. El juego fue cerrado.`,
+                duration: 6000
+            });
+        } catch (_) {}
+        finally {
+            // Limpia ambos timers cuando ocurra el kill
+            clearGameTimers(gameName);
+        }
+    }, totalMs);
+
+    // Guardar ambos timers
+    playTimers[gameName] = { ...(playTimers[gameName] || {}), kill: killTimer };
+
+    // Feedback UI
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("playtime-set", { gameName, minutes });
+    }
+    showOverlay({
+        variant: 'info',
+        title: 'Tiempo establecido',
+        body: `Se establecieron <b>${minutes} min</b> para <b>${gameName}</b>.`,
+        duration: 4000
+    });
 });
 
-ipcMain.on('game-unblocked', (event, gameName) => {
-    // Reiniciar el tiempo del juego al momento del desbloqueo
-    gameTimes[gameName] = { start: Date.now() }; // Reiniciar el temporizador a la fecha actual
-    mainWindow.webContents.send('game-unblocked', gameName);
+ipcMain.on('game-unblocked', (_event, gameName) => {
+    gameTimes[gameName] = { start: Date.now() };
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('game-unblocked', gameName);
+    }
+    showOverlay({
+        variant: 'success',
+        title: 'Juego desbloqueado',
+        body: `Se ha desbloqueado <b>${gameName}</b>.`,
+        duration: 3500
+    });
 });
 
 app.whenReady().then(() => {
     createWindow();
+    createOverlayWindow();
     createTray();
 
+    // Loop de escaneo
     setInterval(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        const url = mainWindow.webContents.getURL();
+        if (!url.endsWith('/index.html')) return;
+
         getRunningGames().then(games => {
             const now = Date.now();
-
             games.forEach(gameName => {
-                // Si el juego no está bloqueado, iniciar su tiempo
-                if (!gameTimes[gameName]) {
-                    gameTimes[gameName] = { start: now };
-                }
+                if (!gameTimes[gameName]) gameTimes[gameName] = { start: now };
             });
 
-            // Enviar start times al renderer
             const gamesWithStart = games.map(gameName => ({
                 name: gameName,
                 start: gameTimes[gameName]?.start || 0
             }));
 
             mainWindow.webContents.send('update-game-list', gamesWithStart);
-        });
+        }).catch(() => {});
     }, 5000);
+});
+
+app.on('browser-window-blur', () => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+        try { overlayWindow.setAlwaysOnTop(true, 'screen-saver'); } catch (_) {}
+    }
 });
 
 app.on('window-all-closed', () => {
@@ -186,5 +387,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+        createOverlayWindow();
+    }
 });

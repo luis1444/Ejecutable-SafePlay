@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: blob:; img-src 'self' data: blob:;" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Overlay</title>
+    <style>
+        :root{
+            --sky-50:#f0f9ff; --sky-100:#e0f2fe; --sky-200:#bae6fd; --sky-300:#7dd3fc;
+            --sky-400:#38bdf8; --sky-500:#0ea5e9; --sky-600:#0284c7; --sky-700:#0369a1;
+            --ink:#0b3f59; --muted:#5a6c7d; --success:#22c55e; --danger:#ef4444; --warning:#f59e0b;
+        }
+        html, body {height:100%; margin:0; padding:0; background:transparent; overflow:hidden; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;}
+
+        .backdrop{
+            position:fixed; inset:0;
+            display:grid; place-items:center;
+            pointer-events:none;
+        }
+        .stack{ display:grid; gap:16px; }
+
+        .card{
+            pointer-events:auto;
+            min-width:min(560px, 95vw);
+            max-width:95vw;
+            border-radius:20px;
+            background:linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,255,255,.92));
+            border:1px solid var(--sky-200);
+            box-shadow: 0 25px 120px rgba(3,105,161,.35), 0 6px 18px rgba(0,0,0,.08);
+            backdrop-filter: blur(6px);
+            color:#0b3f59;
+            transform: translateY(12px) scale(.98);
+            opacity:0;
+            animation: popIn .18s ease forwards;
+        }
+        @keyframes popIn{ to{transform:none; opacity:1} }
+
+        .card-head{
+            display:flex; align-items:center; justify-content:space-between;
+            padding:14px 18px; border-bottom:1px solid var(--sky-200);
+        }
+        .title{
+            display:flex; align-items:center; gap:10px; font-weight:900; font-size:1.05rem; color:#204158;
+        }
+        .badge{
+            padding:4px 10px; border-radius:999px; font-size:.75rem; font-weight:800;
+            border:1px solid var(--sky-300); color:#0369a1; background:linear-gradient(180deg, var(--sky-100), var(--sky-50));
+        }
+        .badge.success{ border-color:#86efac; color:#166534; background:linear-gradient(180deg, #dcfce7, #f0fdf4) }
+        .badge.warn{ border-color:#fde68a; color:#92400e; background:linear-gradient(180deg, #fef3c7, #fffbeb) }
+        .badge.error{ border-color:#fecaca; color:#7f1d1d; background:linear-gradient(180deg, #fee2e2, #fff1f2) }
+
+        .close{
+            border:1px solid #fecaca; background:#fff; color:#7f1d1d;
+            border-radius:10px; padding:6px 10px; cursor:pointer; font-weight:800;
+        }
+        .close:hover{ background:#ffe4e6 }
+
+        .card-body{ padding:14px 18px; color:var(--muted); font-size:1rem }
+
+        .progress{
+            height:6px; width:100%; background:var(--sky-100); border-radius:999px; overflow:hidden; margin:0 18px 18px;
+        }
+        .progress > i{
+            display:block; height:100%; width:0%;
+            background:linear-gradient(90deg, var(--sky-400), var(--sky-600));
+            animation-name: countdown;
+            animation-timing-function: linear;
+            animation-fill-mode: forwards;
+            animation-duration: 4000ms;
+        }
+        @keyframes countdown{ to{ width:100% } }
+
+        .card.success{ border-left:6px solid var(--success) }
+        .card.warn{ border-left:6px solid var(--warning) }
+        .card.error{ border-left:6px solid var(--danger) }
+        .card.info{ border-left:6px solid var(--sky-500) }
+
+        @media (max-height:500px){
+            .backdrop{ align-items:start; padding-top:20px }
+        }
+    </style>
+</head>
+<body>
+
+<div id="backdrop" class="backdrop" aria-live="polite" aria-atomic="true">
+    <div id="stack" class="stack"></div>
+</div>
+
+<script>
+    const { ipcRenderer } = require('electron');
+
+    function showCard({ variant='info', title='Notificación', body='', duration=4000 } = {}){
+        const stack = document.getElementById('stack');
+        const card  = document.createElement('div');
+        card.className = `card ${variant}`;
+
+        const badgeClass = variant === 'success' ? 'success' : variant === 'warn' ? 'warn' : variant === 'error' ? 'error' : '';
+        const badgeText  = variant === 'success' ? 'Éxito'   : variant === 'warn' ? 'Aviso' : variant === 'error' ? 'Error'   : 'Info';
+
+        const durMs = Math.max(1500, duration);
+
+        card.innerHTML = `
+      <div class="card-head">
+        <div class="title">
+          <span class="badge ${badgeClass}">${badgeText}</span>
+          <span>${title}</span>
+        </div>
+        <button class="close" title="Cerrar">Cerrar</button>
+      </div>
+      <div class="card-body">${body}</div>
+      <div class="progress"><i></i></div>
+    `;
+
+        const bar = card.querySelector('.progress > i');
+        if (bar) {
+            bar.style.animationDuration = durMs + 'ms';
+            bar.style.animationName = 'countdown';
+        }
+
+        // Click-through toggle: al pasar el mouse sobre la card, permitimos clicks
+        card.addEventListener('mouseenter', () => ipcRenderer.send('overlay:hover', true));
+        card.addEventListener('mouseleave', () => ipcRenderer.send('overlay:hover', false));
+
+        const btn = card.querySelector('.close');
+        btn && btn.addEventListener('click', () => removeCard(card));
+
+        const timer = setTimeout(() => removeCard(card), durMs + 200);
+        card._timer = timer;
+
+        stack.innerHTML = ''; // limpia anteriores (una a la vez)
+        stack.appendChild(card);
+    }
+
+    function removeCard(card){
+        if (!card) return;
+        if (card._timer) clearTimeout(card._timer);
+        card.style.transition = 'opacity .15s ease, transform .2s ease';
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(8px) scale(.98)';
+        setTimeout(() => {
+            const parent = card.parentElement;
+            card.remove();
+            // Volvemos al modo click-through total
+            ipcRenderer.send('overlay:hover', false);
+        }, 160);
+    }
+
+    function clearAll(){
+        const stack = document.getElementById('stack');
+        [...stack.children].forEach(removeCard);
+        ipcRenderer.send('overlay:hover', false);
+    }
+
+    ipcRenderer.on('overlay:show', (_e, payload) => {
+        showCard(payload || {});
+    });
+
+    ipcRenderer.on('overlay:clear', () => {
+        clearAll();
+    });
+
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') clearAll();
+    });
+</script>
+
+</body>
+</html>
