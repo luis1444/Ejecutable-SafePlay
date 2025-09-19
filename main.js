@@ -126,7 +126,6 @@ function createOverlayWindow() {
     overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     overlayWindow.fullScreenable = false;
 
-    // Click-through por defecto
     try {
         overlayWindow.setIgnoreMouseEvents(true, { forward: true });
     } catch (_) {}
@@ -220,7 +219,6 @@ function killGame(gameName) {
     });
 }
 
-// Helpers para timers de cada juego
 function clearGameTimers(gameName) {
     const t = playTimers[gameName];
     if (!t) return;
@@ -257,7 +255,7 @@ ipcMain.on('overlay:hover', (_evt, isHovering) => {
     } catch (_) {}
 });
 
-// Exponer overlay (si alguna vez quieres llamarlo desde renderer)
+// Exponer overlay
 ipcMain.handle('overlay:show', (_evt, payload) => {
     showOverlay(payload || {});
     return { ok: true };
@@ -275,16 +273,13 @@ ipcMain.on('block-game', (_event, gameName) => {
 });
 
 ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
-    // Limpia timers previos
     clearGameTimers(gameName);
 
-    // (Re)inicia el temporizador del juego
     gameTimes[gameName] = { start: Date.now() };
 
     const totalMs = minutes * 60 * 1000;
     const warnOffset = 30 * 1000;
 
-    // Timer de aviso 30s antes, solo si hay tiempo suficiente
     if (totalMs > warnOffset) {
         const warnTimer = setTimeout(() => {
             try {
@@ -292,16 +287,15 @@ ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
                     variant: 'warn',
                     title: 'Aviso: cierre inminente',
                     body: `El juego <b>${gameName}</b> se cerrará en <b>30 segundos</b> por límite de tiempo.`,
-                    duration: 6000
+                    duration: 30000,        // Overlay visible 30s
+                    countdownMs: 30000      // Barra + cronómetro
                 });
             } catch (_) {}
         }, totalMs - warnOffset);
 
-        // Guardar
         playTimers[gameName] = { ...(playTimers[gameName] || {}), warn: warnTimer };
     }
 
-    // Timer de cierre
     const killTimer = setTimeout(() => {
         try {
             killGame(gameName);
@@ -316,15 +310,12 @@ ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
             });
         } catch (_) {}
         finally {
-            // Limpia ambos timers cuando ocurra el kill
             clearGameTimers(gameName);
         }
     }, totalMs);
 
-    // Guardar ambos timers
     playTimers[gameName] = { ...(playTimers[gameName] || {}), kill: killTimer };
 
-    // Feedback UI
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("playtime-set", { gameName, minutes });
     }
@@ -354,7 +345,6 @@ app.whenReady().then(() => {
     createOverlayWindow();
     createTray();
 
-    // Loop de escaneo
     setInterval(() => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
         const url = mainWindow.webContents.getURL();
