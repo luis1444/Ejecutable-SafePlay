@@ -5,154 +5,186 @@ const os = require('os');
 
 let mainWindow;
 let tray;
+let gameTimes = {};   // { gameName: { start: timestamp } }
+let playTimers = {};  // { gameName: timeoutId }
 
-// Función para obtener los juegos activos
 function getRunningGames() {
     return new Promise((resolve, reject) => {
         const platform = os.platform();
         let command = '';
 
         if (platform === 'win32') {
-            command = 'tasklist /FI "STATUS eq running" /FO LIST';
-        } else if (platform === 'darwin' || platform === 'linux') {
+            command = 'powershell "Get-Process | Select-Object ProcessName,Path"';
+        } else {
             command = 'ps aux';
         }
 
-        exec(command, { encoding: 'latin1' }, (error, stdout, stderr) => {
+        exec(command, { encoding: 'utf8', maxBuffer: 1024 * 500 }, (error, stdout, stderr) => {
             if (error) {
-                console.error('Error ejecutando tasklist:', stderr);
-                reject(`Error al obtener la lista de procesos: ${stderr}`);
+                reject(`Error al obtener procesos: ${stderr}`);
                 return;
             }
 
             let games = [];
 
             if (platform === 'win32') {
-                const lines = stdout.split('\n');
-                let currentImageName = '';
-                let processCount = 0;
-
+                const lines = stdout.split('\n').slice(3);
                 for (let line of lines) {
-                    line = line.trim();
-                    if (line.startsWith('Nombre de imagen:') || line.startsWith('Image Name:')) {
-                        if (currentImageName) {
-                            if (currentImageName.endsWith('.exe')) {
-                                const lowerName = currentImageName.toLowerCase();
-                                if (lowerName.includes('steam') || lowerName.includes('stumble guys') || lowerName.includes('gameoverlayui')) {
-                                    games.push(currentImageName);
-                                }
-                            }
-                        }
-                        currentImageName = line.split(':')[1]?.trim() || '';
-                        processCount++;
+                    if (!line.trim()) continue;
+                    const parts = line.trim().split(/\s{2,}/).filter(Boolean);
+                    if (parts.length < 2) continue;
+
+                    const exeName = parts[0];
+                    const exePath = parts[1];
+
+                    if (exePath && exePath.toLowerCase().includes('steamapps\\common')) {
+                        games.push({
+                            name: exeName.replace('.exe', ''),
+                            path: exePath
+                        });
                     }
                 }
 
-                if (currentImageName) {
-                    if (currentImageName.endsWith('.exe')) {
-                        const lowerName = currentImageName.toLowerCase();
-                        if (lowerName.includes('steam') || lowerName.includes('stumble guys') || lowerName.includes('gameoverlayui')) {
-                            games.push(currentImageName);
-                        }
+                const uniqueGames = {};
+                games.forEach(game => {
+                    const folder = path.dirname(game.path);
+                    if (!uniqueGames[folder]) {
+                        uniqueGames[folder] = game.name;
                     }
-                }
+                });
 
-                console.log(`Cantidad de procesos encontrados: ${processCount}`);
+                games = Object.values(uniqueGames);
             } else {
                 const lines = stdout.split('\n').slice(1);
                 lines.forEach(line => {
                     if (!line.trim()) return;
-                    const parts = line.trim().split(/\s{2,}/);
+                    const parts = line.trim().split(/\s+/);
                     const command = parts[parts.length - 1];
-                    const processName = command.split('/').pop();
-                    const lowerName = processName.toLowerCase();
-                    if (lowerName.includes('steam') || lowerName.includes('stumble guys') || lowerName.includes('gameoverlayui')) {
-                        games.push(processName);
+                    if (command.toLowerCase().includes('steamapps')) {
+                        const processName = command.split('/').pop();
+                        games.push(processName.replace('.exe', ''));
                     }
                 });
             }
 
-            console.log('Juegos filtrados (Steam-related):', games);
             resolve(games);
         });
     });
 }
 
-// Función para crear la ventana principal
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 800,
         height: 600,
         icon: path.join(__dirname, 'assets', 'icon.png'),
         webPreferences: {
-            preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: true,
+            contextIsolation: false
         }
     });
 
     mainWindow.loadFile('index.html');
 }
 
-// Función para crear el icono en la bandeja
 function createTray() {
     tray = new Tray(path.join(__dirname, 'assets', 'tray-icon.png'));
     const contextMenu = Menu.buildFromTemplate([
-        {
-            label: 'Salir', click: () => {
-                app.quit();
-            }
-        }
+        { label: 'Salir', click: () => app.quit() }
     ]);
-
     tray.setToolTip('SafePlay App');
     tray.setContextMenu(contextMenu);
 }
 
-// Función para bloquear el juego
-ipcMain.on('block-game', (event, gameName) => {
-    console.log(`Intentando bloquear: ${gameName}`);
+function killGame(gameName) {
     const platform = os.platform();
-    let command = '';
+    let command = platform === 'win32'
+        ? `taskkill /IM "${gameName}.exe" /F`
+        : `pkill -f ${gameName}`;
 
-    if (platform === 'win32') {
-        command = `taskkill /IM "${gameName}" /F`;
-    } else if (platform === 'darwin' || platform === 'linux') {
-        command = `pkill -f ${gameName}`;
-    }
-
-    exec(command, (error, stdout, stderr) => {
+    exec(command, (error) => {
         if (error) {
-            console.error(`Error al cerrar el juego: ${stderr}`);
+            mainWindow.webContents.send('game-blocked', {
+                name: gameName,
+                success: false,
+                message: `❌ No se pudo cerrar ${gameName}.`
+            });
         } else {
-            console.log(`Juego bloqueado: ${stdout}`);
+            mainWindow.webContents.send('game-blocked', {
+                name: gameName,
+                success: true,
+                message: `✅ Juego cerrado: ${gameName}`
+            });
         }
     });
+}
+
+ipcMain.on('block-game', (event, gameName) => {
+    // Detener el temporizador cuando el juego se bloquea
+    if (playTimers[gameName]) {
+        clearTimeout(playTimers[gameName]);
+        delete playTimers[gameName];
+    }
+    // Eliminar el juego de gameTimes cuando se bloquea
+    delete gameTimes[gameName];
+    killGame(gameName);
 });
 
-// Inicializa la aplicación
+ipcMain.on("set-playtime", (event, { gameName, minutes }) => {
+    // Detener el temporizador anterior si existe
+    if (playTimers[gameName]) {
+        clearTimeout(playTimers[gameName]);
+        delete playTimers[gameName];
+    }
+
+    // Reiniciar el tiempo del juego a la hora actual (esto reinicia el contador)
+    gameTimes[gameName] = { start: Date.now() };
+
+    // Establecer un nuevo temporizador para el juego
+    playTimers[gameName] = setTimeout(() => {
+        killGame(gameName);  // Bloquear el juego cuando termine el tiempo
+        mainWindow.webContents.send("time-up", gameName);
+    }, minutes * 60 * 1000);  // Convertir minutos a milisegundos
+
+    // Enviar al renderizador el tiempo establecido
+    mainWindow.webContents.send("playtime-set", { gameName, minutes });
+});
+
+ipcMain.on('game-unblocked', (event, gameName) => {
+    // Reiniciar el tiempo del juego al momento del desbloqueo
+    gameTimes[gameName] = { start: Date.now() }; // Reiniciar el temporizador a la fecha actual
+    mainWindow.webContents.send('game-unblocked', gameName);
+});
+
 app.whenReady().then(() => {
     createWindow();
     createTray();
+
     setInterval(() => {
         getRunningGames().then(games => {
-            console.log('Enviando juegos al frontend:', games);
-            mainWindow.webContents.send('update-game-list', games);
-        }).catch(err => {
-            console.error('Error al obtener los juegos:', err);
+            const now = Date.now();
+
+            games.forEach(gameName => {
+                // Si el juego no está bloqueado, iniciar su tiempo
+                if (!gameTimes[gameName]) {
+                    gameTimes[gameName] = { start: now };
+                }
+            });
+
+            // Enviar start times al renderer
+            const gamesWithStart = games.map(gameName => ({
+                name: gameName,
+                start: gameTimes[gameName]?.start || 0
+            }));
+
+            mainWindow.webContents.send('update-game-list', gamesWithStart);
         });
-    }, 5000); // Actualizar cada 5 segundos
+    }, 5000);
 });
 
-// Cierra la app cuando todas las ventanas están cerradas
 app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
+    if (process.platform !== 'darwin') app.quit();
 });
 
-// Vuelve a crear la ventana en Mac si es necesario
 app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
