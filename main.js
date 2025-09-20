@@ -10,13 +10,45 @@ let overlayWindow;
 let tray;
 let gameTimes = {};   // { gameName: { start: timestamp } }
 
-// Ahora almacenamos ambos timers por juego
-// playTimers[gameName] = { kill: Timeout, warn: Timeout }
+// Timers por juego: playTimers[gameName] = { kill: Timeout, warn: Timeout }
 let playTimers = {};
 
-// Anti-dup de overlays (evita spam accidental)
+// Anti-dup de overlays
 let lastOverlayKey = '';
 let lastOverlayTs = 0;
+
+// --- Config de polling ---
+const BASE_POLL_MS   = 1000;
+const BURST_MS       = 10000;
+const BURST_INTERVAL = 500;
+
+let baseIntervalId = null;
+let burstIntervalId = null;
+let burstUntil = 0;
+
+const recentlyKilled = new Map();   // { gameName: timestamp }
+const KILLED_GRACE_MS = 3000;
+
+// NUEVO: recuerda “starts” recientes para no spamear overlays
+const recentlyStarted = new Map();  // { gameName: timestamp }
+const START_OVERLAY_COOLDOWN_MS = 5000;
+
+// ============ Funciones Aux ============
+
+function startBurstPoll(ms = BURST_MS, every = BURST_INTERVAL) {
+    const now = Date.now();
+    burstUntil = Math.max(burstUntil, now + ms);
+    if (burstIntervalId) return;
+
+    burstIntervalId = setInterval(() => {
+        const t = Date.now();
+        scanGames();
+        if (t >= burstUntil) {
+            clearInterval(burstIntervalId);
+            burstIntervalId = null;
+        }
+    }, every);
+}
 
 function getRunningGames() {
     return new Promise((resolve, reject) => {
@@ -79,6 +111,94 @@ function getRunningGames() {
     });
 }
 
+async function scanGames() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const url = mainWindow.webContents.getURL();
+    if (!url.endsWith('/index.html')) return;
+
+    try {
+        const games = await getRunningGames();
+        const now = Date.now();
+
+        const newGames = [];
+
+        // Detectar nuevos + registrar
+        games.forEach(gameName => {
+            if (!gameTimes[gameName]) {
+                gameTimes[gameName] = { start: now };
+                // Overlay “Juego iniciado” con cooldown anti-spam
+                const lastStart = recentlyStarted.get(gameName) || 0;
+                if (now - lastStart > START_OVERLAY_COOLDOWN_MS) {
+                    recentlyStarted.set(gameName, now);
+                    showOverlay({
+                        variant: 'success',
+                        title: 'Juego iniciado',
+                        body: `Se inició <b>${gameName}</b>.`,
+                        duration: 3500
+                    });
+                    startBurstPoll(4000, 400);
+                }
+                newGames.push(gameName);
+            }
+        });
+
+        // Enviar lista
+        const gamesWithStart = games.map(gameName => ({
+            name: gameName,
+            start: gameTimes[gameName]?.start || 0
+        }));
+        mainWindow.webContents.send('update-game-list', gamesWithStart);
+
+        // Detectar cerrados
+        const runningSet = new Set(games);
+        let anyClosed = false;
+
+        Object.keys(gameTimes).forEach(trackedGame => {
+            if (!runningSet.has(trackedGame)) {
+                const killedAt = recentlyKilled.get(trackedGame);
+                if (killedAt && (Date.now() - killedAt) < KILLED_GRACE_MS) {
+                    clearGameTimers(trackedGame);
+                    delete gameTimes[trackedGame];
+                    anyClosed = true;
+                    return;
+                }
+                // Cierre manual
+                handleUserClosedGame(trackedGame);
+                anyClosed = true;
+            }
+        });
+
+        // Limpieza de marcas
+        for (const [name, ts] of recentlyKilled) {
+            if ((Date.now() - ts) > (KILLED_GRACE_MS * 3)) {
+                recentlyKilled.delete(name);
+            }
+        }
+        for (const [name, ts] of recentlyStarted) {
+            if ((Date.now() - ts) > 60000) {
+                recentlyStarted.delete(name);
+            }
+        }
+
+        if (anyClosed || newGames.length) startBurstPoll(4000, 400);
+
+    } catch (_) {}
+}
+
+function handleUserClosedGame(gameName) {
+    clearGameTimers(gameName);
+    delete gameTimes[gameName];
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('game-closed-manual', gameName);
+    }
+    showOverlay({
+        variant: 'info',
+        title: 'Juego cerrado',
+        body: `El usuario cerró <b>${gameName}</b> manualmente.`,
+        duration: 5000
+    });
+}
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 980,
@@ -90,7 +210,6 @@ function createWindow() {
         }
     });
 
-    // [AUTH]
     AuthService.getSession().then(sess => {
         if (sess) mainWindow.loadFile('index.html');
         else mainWindow.loadFile('login.html');
@@ -202,6 +321,9 @@ function killGame(gameName) {
                 duration: 5000
             });
         } else {
+            recentlyKilled.set(gameName, Date.now());
+            startBurstPoll(4000, 400);
+
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('game-blocked', {
                     name: gameName,
@@ -255,7 +377,6 @@ ipcMain.on('overlay:hover', (_evt, isHovering) => {
     } catch (_) {}
 });
 
-// Exponer overlay
 ipcMain.handle('overlay:show', (_evt, payload) => {
     showOverlay(payload || {});
     return { ok: true };
@@ -287,8 +408,8 @@ ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
                     variant: 'warn',
                     title: 'Aviso: cierre inminente',
                     body: `El juego <b>${gameName}</b> se cerrará en <b>30 segundos</b> por límite de tiempo.`,
-                    duration: 30000,        // Overlay visible 30s
-                    countdownMs: 30000      // Barra + cronómetro
+                    duration: 30000,
+                    countdownMs: 30000
                 });
             } catch (_) {}
         }, totalMs - warnOffset);
@@ -325,6 +446,8 @@ ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
         body: `Se establecieron <b>${minutes} min</b> para <b>${gameName}</b>.`,
         duration: 4000
     });
+
+    startBurstPoll(8000, 500);
 });
 
 ipcMain.on('game-unblocked', (_event, gameName) => {
@@ -345,25 +468,7 @@ app.whenReady().then(() => {
     createOverlayWindow();
     createTray();
 
-    setInterval(() => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        const url = mainWindow.webContents.getURL();
-        if (!url.endsWith('/index.html')) return;
-
-        getRunningGames().then(games => {
-            const now = Date.now();
-            games.forEach(gameName => {
-                if (!gameTimes[gameName]) gameTimes[gameName] = { start: now };
-            });
-
-            const gamesWithStart = games.map(gameName => ({
-                name: gameName,
-                start: gameTimes[gameName]?.start || 0
-            }));
-
-            mainWindow.webContents.send('update-game-list', gamesWithStart);
-        }).catch(() => {});
-    }, 5000);
+    baseIntervalId = setInterval(scanGames, BASE_POLL_MS);
 });
 
 app.on('browser-window-blur', () => {

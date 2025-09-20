@@ -227,6 +227,10 @@ gameListContainer.addEventListener('click', (e) => {
     }
 });
 
+ipcRenderer.on('game-closed', (_e, { name, by }) => {
+    console.log(`Juego cerrado (${by}): ${name}`);
+});
+
 // Re-render cada segundo (solo contenido)
 setInterval(renderGames, 1000);
 

@@ -13,11 +13,11 @@
         }
         html, body {height:100%; margin:0; padding:0; background:transparent; overflow:hidden; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;}
 
-        /* Ya no centramos; usamos un dock abajo-derecha */
+        /* Dock abajo-derecha */
         .dockBR{
             position:fixed; right:20px; bottom:20px; z-index:1200;
             display:grid; gap:12px;
-            pointer-events:none; /* los hijos (cards) sí reciben click */
+            pointer-events:none;
             max-width:min(92vw, 520px);
         }
 
@@ -43,6 +43,9 @@
         }
         .title{
             display:flex; align-items:center; gap:10px; font-weight:900; font-size:1rem; color:#204158;
+        }
+        .gicon{
+            width:22px; height:22px; border-radius:4px; object-fit:cover; border:1px solid var(--sky-200);
         }
         .badge{
             padding:3px 8px; border-radius:999px; font-size:.72rem; font-weight:800;
@@ -77,7 +80,7 @@
             animation-name: countdown;
             animation-timing-function: linear;
             animation-fill-mode: forwards;
-            animation-duration: 4000ms; /* se sobrescribe por JS */
+            animation-duration: 4000ms;
         }
         @keyframes countdown{ to{ width:100% } }
 
@@ -92,62 +95,53 @@
     </style>
 </head>
 <body>
-
-<!-- Dock abajo-derecha -->
 <div id="dockBR" class="dockBR" aria-live="polite" aria-atomic="true"></div>
 
 <script>
     const { ipcRenderer } = require('electron');
-
-    // Guardamos referencias para limpiar intervals
     const timersByCard = new WeakMap();
 
-    function showCard({ variant='info', title='Notificación', body='', duration=4000, countdownMs=0 } = {}){
+    function showCard({ variant='info', title='Notificación', body='', duration=4000, countdownMs=0, icon=null } = {}){
         const dock = document.getElementById('dockBR');
         const card = document.createElement('div');
         card.className = `card ${variant}`;
 
         const badgeClass = variant === 'success' ? 'success' : variant === 'warn' ? 'warn' : variant === 'error' ? 'error' : '';
         const badgeText  = variant === 'success' ? 'Éxito'   : variant === 'warn' ? 'Aviso' : variant === 'error' ? 'Error'   : 'Info';
-
         const durMs = Math.max(1500, countdownMs || duration);
 
         card.innerHTML = `
-      <div class="card-head">
-        <div class="title">
-          <span class="badge ${badgeClass}">${badgeText}</span>
-          <span>${title}</span>
-        </div>
-        <button class="close" title="Cerrar">Cerrar</button>
-      </div>
-      <div class="card-body">${body}</div>
-      <div class="progress"><i></i></div>
-      <div class="footer">
-        <span></span>
-        <span class="countdown" id="countdownTxt">${countdownMs ? formatSecs(Math.ceil(countdownMs/1000)) : ''}</span>
-      </div>
-    `;
+              <div class="card-head">
+                <div class="title">
+                  ${icon ? `<img class="gicon" src="${icon}" alt="">` : ``}
+                  <span class="badge ${badgeClass}">${badgeText}</span>
+                  <span>${title}</span>
+                </div>
+                <button class="close" title="Cerrar">Cerrar</button>
+              </div>
+              <div class="card-body">${body}</div>
+              <div class="progress"><i></i></div>
+              <div class="footer">
+                <span></span>
+                <span class="countdown" id="countdownTxt">${countdownMs ? formatSecs(Math.ceil(countdownMs/1000)) : ''}</span>
+              </div>
+            `;
 
-        // Barra con duración sincronizada
         const bar = card.querySelector('.progress > i');
         if (bar) {
             bar.style.animationDuration = durMs + 'ms';
             bar.style.animationName = 'countdown';
         }
 
-        // Habilitar interacción al hover (sin bloquear el resto de pantalla)
         card.addEventListener('mouseenter', () => ipcRenderer.send('overlay:hover', true));
         card.addEventListener('mouseleave', () => ipcRenderer.send('overlay:hover', false));
 
-        // Cerrar manual
         const btn = card.querySelector('.close');
         btn && btn.addEventListener('click', () => removeCard(card));
 
-        // Temporizador de autocierre
         const closeTimer = setTimeout(() => removeCard(card), durMs + 120);
         timersByCard.set(card, { closeTimer });
 
-        // Contador visual 30→0 (si se pidió)
         if (countdownMs && countdownMs > 0) {
             const txt = card.querySelector('#countdownTxt');
             const t0 = performance.now();
@@ -155,10 +149,7 @@
                 const elapsed = performance.now() - t0;
                 const left = Math.max(0, countdownMs - elapsed);
                 if (txt) txt.textContent = formatSecs(Math.ceil(left/1000));
-                if (left <= 0) {
-                    // por si el close aún no corrió
-                    return;
-                }
+                if (left <= 0) return;
                 const rafId = requestAnimationFrame(tick);
                 const obj = timersByCard.get(card) || {};
                 obj.rafId = rafId;
@@ -170,7 +161,6 @@
             timersByCard.set(card, obj);
         }
 
-        // Reemplaza el aviso previo (uno a la vez)
         dock.innerHTML = '';
         dock.appendChild(card);
     }
@@ -187,7 +177,6 @@
         const t = timersByCard.get(card) || {};
         if (t.closeTimer) clearTimeout(t.closeTimer);
         if (t.rafId) cancelAnimationFrame(t.rafId);
-
         card.style.transition = 'opacity .15s ease, transform .2s ease';
         card.style.opacity = '0';
         card.style.transform = 'translateY(6px) scale(.98)';
@@ -204,18 +193,9 @@
         ipcRenderer.send('overlay:hover', false);
     }
 
-    ipcRenderer.on('overlay:show', (_e, payload) => {
-        showCard(payload || {});
-    });
-
-    ipcRenderer.on('overlay:clear', () => {
-        clearAll();
-    });
-
-    window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') clearAll();
-    });
+    ipcRenderer.on('overlay:show', (_e, payload) => showCard(payload || {}));
+    ipcRenderer.on('overlay:clear', () => clearAll());
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') clearAll(); });
 </script>
-
 </body>
 </html>
