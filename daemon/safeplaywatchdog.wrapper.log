@@ -1,0 +1,2 @@
+2025-09-20 09:45:14 - Starting C:\Program Files\nodejs\node.exe  --harmony C:\apl\Ejecutable-SafePlay\node_modules\node-windows\lib\wrapper.js --file C:\apl\Ejecutable-SafePlay\watchdog.js --scriptoptions= --log "SafePlay Watchdog wrapper" --grow 0.25 --wait 1 --maxrestarts 3 --abortonerror n --stopparentfirst undefined --maxretries 40
+2025-09-20 09:45:14 - Started 18488

@@ -3,7 +3,27 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, screen } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
 const os = require('os');
+const fs = require('fs'); // 👈 NUEVO
 const AuthService = require('./authService');
+
+/* ==================== PARCHE CACHE CHROMIUM (evita errores de "Unable to create cache") ==================== */
+// Dir de userData/cache controlado por nosotros (con permisos de escritura)
+const isWin = process.platform === 'win32';
+const userDataPath = isWin
+    ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'SafePlay')
+    : path.join(os.homedir(), '.safeplay');
+
+try { fs.mkdirSync(userDataPath, { recursive: true }); } catch {}
+try { fs.mkdirSync(path.join(userDataPath, 'Cache'), { recursive: true }); } catch {}
+
+app.setPath('userData', userDataPath);
+app.setPath('cache', path.join(userDataPath, 'Cache'));
+
+// Opcional: apagar caches de red y shader en disco
+app.commandLine.appendSwitch('disable-http-cache');
+app.commandLine.appendSwitch('disk-cache-size', '0');
+app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+/* ============================================================================================================ */
 
 let mainWindow;
 let overlayWindow;
@@ -348,6 +368,8 @@ function clearGameTimers(gameName) {
     try { if (t.warn) clearTimeout(t.warn); } catch(_) {}
     delete playTimers[gameName];
 }
+
+
 
 // === IPC AUTH ===
 ipcMain.handle('auth:login', async (_evt, { email, password }) => {
