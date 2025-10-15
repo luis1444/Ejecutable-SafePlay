@@ -1,13 +1,14 @@
-// main.js
+// main.js (con sistema de polling integrado)
 const { app, BrowserWindow, ipcMain, Tray, Menu, screen } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
 const os = require('os');
-const fs = require('fs'); // 👈 NUEVO
+const fs = require('fs');
 const AuthService = require('./authService');
+const ApiService = require('./apiService');
+const CommandExecutor = require('./commandExecutor');
 
-/* ==================== PARCHE CACHE CHROMIUM (evita errores de "Unable to create cache") ==================== */
-// Dir de userData/cache controlado por nosotros (con permisos de escritura)
+/* ==================== PARCHE CACHE CHROMIUM ==================== */
 const isWin = process.platform === 'win32';
 const userDataPath = isWin
     ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'SafePlay')
@@ -18,42 +19,122 @@ try { fs.mkdirSync(path.join(userDataPath, 'Cache'), { recursive: true }); } cat
 
 app.setPath('userData', userDataPath);
 app.setPath('cache', path.join(userDataPath, 'Cache'));
-
-// Opcional: apagar caches de red y shader en disco
 app.commandLine.appendSwitch('disable-http-cache');
 app.commandLine.appendSwitch('disk-cache-size', '0');
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
-/* ============================================================================================================ */
 
+/* ==================== VARIABLES GLOBALES ==================== */
 let mainWindow;
 let overlayWindow;
 let tray;
-let gameTimes = {};   // { gameName: { start: timestamp } }
-
-// Timers por juego: playTimers[gameName] = { kill: Timeout, warn: Timeout }
+let gameTimes = {};
 let playTimers = {};
 
-// Anti-dup de overlays
-let lastOverlayKey = '';
-let lastOverlayTs = 0;
-
-// --- Config de polling ---
-const BASE_POLL_MS   = 1000;
-const BURST_MS       = 10000;
+// Polling de juegos
+const BASE_POLL_MS = 1000;
+const BURST_MS = 10000;
 const BURST_INTERVAL = 500;
-
 let baseIntervalId = null;
 let burstIntervalId = null;
 let burstUntil = 0;
 
-const recentlyKilled = new Map();   // { gameName: timestamp }
+// Polling de comandos remotos
+const COMMAND_POLL_INTERVAL = 5000;
+let commandPollIntervalId = null;
+let commandExecutor = null;
+
+// Anti-duplicación
+const recentlyKilled = new Map();
 const KILLED_GRACE_MS = 3000;
-
-// NUEVO: recuerda “starts” recientes para no spamear overlays
-const recentlyStarted = new Map();  // { gameName: timestamp }
+const recentlyStarted = new Map();
 const START_OVERLAY_COOLDOWN_MS = 5000;
+let lastOverlayKey = '';
+let lastOverlayTs = 0;
 
-// ============ Funciones Aux ============
+// Cola de logs para enviar en batch
+let activityLogQueue = [];
+const ACTIVITY_LOG_BATCH_SIZE = 10;
+const ACTIVITY_LOG_BATCH_INTERVAL = 30000;
+let activityLogBatchIntervalId = null;
+
+/* ==================== FUNCIONES AUXILIARES DE LOGS ==================== */
+
+function queueActivityLog(gameName, action, duration = null, details = {}) {
+    activityLogQueue.push({
+        gameName,
+        action,
+        duration,
+        details,
+        timestamp: new Date()
+    });
+
+    // Si llegamos al tamaño de batch, enviar inmediatamente
+    if (activityLogQueue.length >= ACTIVITY_LOG_BATCH_SIZE) {
+        flushActivityLogs();
+    }
+}
+
+async function flushActivityLogs() {
+    if (activityLogQueue.length === 0) return;
+
+    const logsToSend = [...activityLogQueue];
+    activityLogQueue = [];
+
+    try {
+        await ApiService.logActivitiesBatch(logsToSend);
+        console.log(`[Activity] ${logsToSend.length} logs enviados al servidor`);
+    } catch (error) {
+        console.error('[Activity] Error enviando logs:', error);
+        // Reinsertar los logs en la cola para reintentar
+        activityLogQueue = [...logsToSend, ...activityLogQueue];
+    }
+}
+
+/* ==================== FUNCIONES DE POLLING DE COMANDOS ==================== */
+
+async function pollCommands() {
+    const session = await AuthService.getSession();
+    if (!session?.token) {
+        console.log('[CommandPoll] No hay sesión activa');
+        return;
+    }
+
+    try {
+        const commands = await ApiService.fetchPendingCommands();
+
+        if (commands.length > 0) {
+            console.log(`[CommandPoll] ${commands.length} comando(s) pendiente(s)`);
+
+            for (const command of commands) {
+                if (commandExecutor) {
+                    await commandExecutor.executeCommand(command);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('[CommandPoll] Error consultando comandos:', error.message);
+    }
+}
+
+function startCommandPolling() {
+    if (commandPollIntervalId) return;
+
+    console.log('[CommandPoll] Iniciando polling de comandos...');
+    commandPollIntervalId = setInterval(pollCommands, COMMAND_POLL_INTERVAL);
+
+    // Primera consulta inmediata
+    pollCommands();
+}
+
+function stopCommandPolling() {
+    if (commandPollIntervalId) {
+        clearInterval(commandPollIntervalId);
+        commandPollIntervalId = null;
+        console.log('[CommandPoll] Polling de comandos detenido');
+    }
+}
+
+/* ==================== FUNCIONES DE JUEGOS (TU CÓDIGO ORIGINAL) ==================== */
 
 function startBurstPoll(ms = BURST_MS, every = BURST_INTERVAL) {
     const now = Date.now();
@@ -139,14 +220,12 @@ async function scanGames() {
     try {
         const games = await getRunningGames();
         const now = Date.now();
-
         const newGames = [];
 
-        // Detectar nuevos + registrar
         games.forEach(gameName => {
             if (!gameTimes[gameName]) {
                 gameTimes[gameName] = { start: now };
-                // Overlay “Juego iniciado” con cooldown anti-spam
+
                 const lastStart = recentlyStarted.get(gameName) || 0;
                 if (now - lastStart > START_OVERLAY_COOLDOWN_MS) {
                     recentlyStarted.set(gameName, now);
@@ -157,12 +236,16 @@ async function scanGames() {
                         duration: 3500
                     });
                     startBurstPoll(4000, 400);
+
+                    // 📊 Registrar inicio en cola
+                    queueActivityLog(gameName, 'started', null, {
+                        timestamp: new Date()
+                    });
                 }
                 newGames.push(gameName);
             }
         });
 
-        // Enviar lista
         const gamesWithStart = games.map(gameName => ({
             name: gameName,
             start: gameTimes[gameName]?.start || 0
@@ -180,15 +263,20 @@ async function scanGames() {
                     clearGameTimers(trackedGame);
                     delete gameTimes[trackedGame];
                     anyClosed = true;
+
+                    // 📊 Registrar cierre (matado por sistema)
+                    queueActivityLog(trackedGame, 'closed', null, {
+                        reason: 'Killed by system'
+                    });
                     return;
                 }
-                // Cierre manual
+
                 handleUserClosedGame(trackedGame);
                 anyClosed = true;
             }
         });
 
-        // Limpieza de marcas
+        // Limpieza
         for (const [name, ts] of recentlyKilled) {
             if ((Date.now() - ts) > (KILLED_GRACE_MS * 3)) {
                 recentlyKilled.delete(name);
@@ -208,14 +296,21 @@ async function scanGames() {
 function handleUserClosedGame(gameName) {
     clearGameTimers(gameName);
     delete gameTimes[gameName];
+
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('game-closed-manual', gameName);
     }
+
     showOverlay({
         variant: 'info',
         title: 'Juego cerrado',
         body: `El usuario cerró <b>${gameName}</b> manualmente.`,
         duration: 5000
+    });
+
+    // 📊 Registrar cierre manual
+    queueActivityLog(gameName, 'closed', null, {
+        reason: 'User closed manually'
     });
 }
 
@@ -231,12 +326,18 @@ function createWindow() {
     });
 
     AuthService.getSession().then(sess => {
-        if (sess) mainWindow.loadFile('index.html');
-        else mainWindow.loadFile('login.html');
+        if (sess) {
+            mainWindow.loadFile('index.html');
+            // 🚀 Iniciar polling de comandos cuando hay sesión
+            startCommandPolling();
+        } else {
+            mainWindow.loadFile('login.html');
+        }
     });
 
     mainWindow.on('closed', () => {
         mainWindow = null;
+        stopCommandPolling();
     });
 }
 
@@ -369,12 +470,13 @@ function clearGameTimers(gameName) {
     delete playTimers[gameName];
 }
 
+/* ==================== IPC AUTH ==================== */
 
-
-// === IPC AUTH ===
 ipcMain.handle('auth:login', async (_evt, { email, password }) => {
     try {
         const { token, user } = await AuthService.login({ email, password });
+        // 🚀 Iniciar polling después de login exitoso
+        startCommandPolling();
         return { ok: true, user };
     } catch (err) {
         return { ok: false, message: err?.message || 'Error de autenticación' };
@@ -383,15 +485,20 @@ ipcMain.handle('auth:login', async (_evt, { email, password }) => {
 
 ipcMain.handle('auth:getSession', async () => {
     const sess = await AuthService.getSession();
+    if (sess) {
+        // 🚀 Reiniciar polling si hay sesión
+        startCommandPolling();
+    }
     return { ok: !!sess, session: sess || null };
 });
 
 ipcMain.handle('auth:logout', async () => {
+    stopCommandPolling();
+    flushActivityLogs();
     await AuthService.logout();
     return { ok: true };
 });
 
-// Overlay hover toggle
 ipcMain.on('overlay:hover', (_evt, isHovering) => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return;
     try {
@@ -403,12 +510,14 @@ ipcMain.handle('overlay:show', (_evt, payload) => {
     showOverlay(payload || {});
     return { ok: true };
 });
+
 ipcMain.handle('overlay:clear', () => {
     clearOverlay();
     return { ok: true };
 });
 
-// === IPC Juegos ===
+/* ==================== IPC JUEGOS ==================== */
+
 ipcMain.on('block-game', (_event, gameName) => {
     clearGameTimers(gameName);
     delete gameTimes[gameName];
@@ -417,7 +526,6 @@ ipcMain.on('block-game', (_event, gameName) => {
 
 ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
     clearGameTimers(gameName);
-
     gameTimes[gameName] = { start: Date.now() };
 
     const totalMs = minutes * 60 * 1000;
@@ -425,15 +533,13 @@ ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
 
     if (totalMs > warnOffset) {
         const warnTimer = setTimeout(() => {
-            try {
-                showOverlay({
-                    variant: 'warn',
-                    title: 'Aviso: cierre inminente',
-                    body: `El juego <b>${gameName}</b> se cerrará en <b>30 segundos</b> por límite de tiempo.`,
-                    duration: 30000,
-                    countdownMs: 30000
-                });
-            } catch (_) {}
+            showOverlay({
+                variant: 'warn',
+                title: 'Aviso: cierre inminente',
+                body: `El juego <b>${gameName}</b> se cerrará en <b>30 segundos</b> por límite de tiempo.`,
+                duration: 30000,
+                countdownMs: 30000
+            });
         }, totalMs - warnOffset);
 
         playTimers[gameName] = { ...(playTimers[gameName] || {}), warn: warnTimer };
@@ -451,6 +557,11 @@ ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
                 body: `El tiempo de <b>${gameName}</b> se ha cumplido. El juego fue cerrado.`,
                 duration: 6000
             });
+
+            // 📊 Registrar tiempo agotado
+            queueActivityLog(gameName, 'closed', minutes * 60, {
+                reason: 'Time limit reached'
+            });
         } catch (_) {}
         finally {
             clearGameTimers(gameName);
@@ -462,6 +573,7 @@ ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("playtime-set", { gameName, minutes });
     }
+
     showOverlay({
         variant: 'info',
         title: 'Tiempo establecido',
@@ -485,12 +597,17 @@ ipcMain.on('game-unblocked', (_event, gameName) => {
     });
 });
 
+/* ==================== APP LIFECYCLE ==================== */
+
 app.whenReady().then(() => {
     createWindow();
     createOverlayWindow();
     createTray();
 
     baseIntervalId = setInterval(scanGames, BASE_POLL_MS);
+
+    // Iniciar batch de logs cada 30 segundos
+    activityLogBatchIntervalId = setInterval(flushActivityLogs, ACTIVITY_LOG_BATCH_INTERVAL);
 });
 
 app.on('browser-window-blur', () => {
@@ -509,3 +626,22 @@ app.on('activate', () => {
         createOverlayWindow();
     }
 });
+
+app.on('before-quit', () => {
+    flushActivityLogs();
+    stopCommandPolling();
+});
+
+// Inicializar CommandExecutor cuando hay mainWindow
+setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        commandExecutor = new CommandExecutor(
+            mainWindow,
+            killGame,
+            (gameName, minutes) => {
+                ipcMain.emit('set-playtime', null, { gameName, minutes });
+            },
+            showOverlay
+        );
+    }
+}, 1000);
