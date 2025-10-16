@@ -1,7 +1,7 @@
 // apiService.js (proceso main de Electron)
 const AuthService = require('./authService');
 
-const API_BASE_URL = process.env.API_BASE_URL || 'https://safeplay.onrender.com';
+const API_BASE_URL = process.env.API_BASE_URL || 'https://safeeplay.com';
 
 class ApiService {
     /**
@@ -9,9 +9,13 @@ class ApiService {
      */
     static async fetchPendingCommands() {
         const session = await AuthService.getSession();
+        console.log('[ApiService] Session:', session?.token ? 'OK' : 'NO TOKEN');
+
         if (!session?.token) {
             throw new Error('No hay sesión activa');
         }
+
+        console.log(`[ApiService] Consultando: ${API_BASE_URL}/api/electron/commands/pending`);
 
         const res = await fetch(`${API_BASE_URL}/api/electron/commands/pending`, {
             method: 'GET',
@@ -21,12 +25,16 @@ class ApiService {
             }
         });
 
+        console.log(`[ApiService] Response status: ${res.status}`);
+
         if (!res.ok) {
             const error = await res.json().catch(() => ({}));
+            console.error('[ApiService] Error response:', error);
             throw new Error(error.error || `HTTP ${res.status}`);
         }
 
         const data = await res.json();
+        console.log('[ApiService] Commands received:', data);
         return data.commands || [];
     }
 
@@ -136,3 +144,4 @@ class ApiService {
 }
 
 module.exports = ApiService;
+

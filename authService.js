@@ -17,7 +17,7 @@ try {
 
 /** CONFIG **/
 const USE_MOCK = false; // usamos backend real
-const API_BASE_URL = process.env.API_BASE_URL || 'https://safeplay.onrender.com';
+const API_BASE_URL = process.env.API_BASE_URL || 'https://safeeplay.com';
 /************/
 
 async function saveTokenSecure(token) {
