@@ -632,16 +632,18 @@ app.on('before-quit', () => {
     stopCommandPolling();
 });
 
-// Inicializar CommandExecutor cuando hay mainWindow
+// Inicializar CommandExecutor después de que todo esté listo
 setTimeout(() => {
     if (mainWindow && !mainWindow.isDestroyed()) {
         commandExecutor = new CommandExecutor(
             mainWindow,
-            killGame,
+            killGame.bind(this), // Pasar la función correctamente
             (gameName, minutes) => {
+                // Ejecutar set-playtime
                 ipcMain.emit('set-playtime', null, { gameName, minutes });
             },
-            showOverlay
+            showOverlay.bind(this)
         );
+        console.log('[Main] CommandExecutor inicializado');
     }
-}, 1000);
+}, 1500);

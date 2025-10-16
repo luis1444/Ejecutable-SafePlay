@@ -124,4 +124,37 @@ const AuthService = {
     }
 };
 
+async function loginRemote({ email, password }) {
+    const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: email, password })
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.token) {
+        const msg = data?.error || data?.message || `Respuesta de login inválida`;
+        const err = new Error(msg);
+        err.code = res.status;
+        throw err;
+    }
+
+    let user = data.user;
+    if (!user) {
+        const payload = decodeJwt(data.token) || {};
+        console.log('[Auth] JWT Payload:', payload); // ← AGREGAR ESTO
+        const id = payload.id ?? payload.userId ?? payload.sub ?? 'unknown';
+        const username = payload.username ?? payload.name ?? 'Supervisor';
+        user = {
+            id,
+            username,
+            name: username,
+            email: null,
+            role: 'supervisor',
+        };
+    }
+
+    console.log('[Auth] User después del login:', user); // ← AGREGAR ESTO
+    return { token: data.token, user };
+}
 module.exports = AuthService;
