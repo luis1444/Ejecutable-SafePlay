@@ -443,6 +443,7 @@ function killGame(gameName) {
             });
         } else {
             recentlyKilled.set(gameName, Date.now());
+            clearGameTimers(gameName);
             startBurstPoll(4000, 400);
 
             if (mainWindow && !mainWindow.isDestroyed()) {
@@ -595,6 +596,11 @@ ipcMain.on('game-unblocked', (_event, gameName) => {
         body: `Se ha desbloqueado <b>${gameName}</b>.`,
         duration: 3500
     });
+});
+
+ipcMain.on('clear-game-timers', (_event, gameName) => {
+    clearGameTimers(gameName);
+    delete gameTimes[gameName];
 });
 
 /* ==================== APP LIFECYCLE ==================== */

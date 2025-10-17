@@ -63,6 +63,11 @@ class CommandExecutor {
             throw new Error('Nombre de juego requerido para bloquear');
         }
 
+        // IMPORTANTE: Limpiar timers ANTES de bloquear
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.webContents.send('clear-game-timers', gameName);
+        }
+
         console.log(`[CommandExecutor] killGame("${gameName}")`);
         this.killGame(gameName);
 
@@ -73,7 +78,6 @@ class CommandExecutor {
             duration: 5000
         });
 
-        // Log al servidor
         await ApiService.logActivity(gameName, 'blocked', null, {
             reason: 'Comando remoto desde web'
         });
