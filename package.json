@@ -1,6 +1,6 @@
 {
   "name": "ejecutablesafeplay",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -9,7 +9,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "SafePlay - Supervisor de juegos",
   "devDependencies": {
     "electron": "^38.0.0",
     "electron-builder": "^25.0.0"
@@ -30,7 +30,13 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "signingHashAlgorithms": ["sha256"],
+      "certificateFile": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }
