@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: blob:; img-src 'self' data: blob:;" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Overlay</title>
+    <style>
+        :root{
+            --sky-50:#f0f9ff; --sky-100:#e0f2fe; --sky-200:#bae6fd; --sky-300:#7dd3fc;
+            --sky-400:#38bdf8; --sky-500:#0ea5e9; --sky-600:#0284c7; --sky-700:#0369a1;
+            --ink:#0b3f59; --muted:#5a6c7d; --success:#22c55e; --danger:#ef4444; --warning:#f59e0b;
+        }
+        html, body {height:100%; margin:0; padding:0; background:transparent; overflow:hidden; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;}
+
+        /* Dock abajo-derecha */
+        .dockBR{
+            position:fixed; right:20px; bottom:20px; z-index:1200;
+            display:grid; gap:12px;
+            pointer-events:none;
+            max-width:min(92vw, 520px);
+        }
+
+        .card{
+            pointer-events:auto;
+            min-width: min(420px, 92vw);
+            max-width: 520px;
+            border-radius:16px;
+            background:linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,255,255,.92));
+            border:1px solid var(--sky-200);
+            box-shadow: 0 20px 80px rgba(3,105,161,.28), 0 6px 18px rgba(0,0,0,.08);
+            backdrop-filter: blur(6px);
+            color:#0b3f59;
+            transform: translateY(8px) scale(.98);
+            opacity:0;
+            animation: popIn .18s ease forwards;
+        }
+        @keyframes popIn{ to{transform:none; opacity:1} }
+
+        .card-head{
+            display:flex; align-items:center; justify-content:space-between;
+            padding:12px 16px; border-bottom:1px solid var(--sky-200);
+        }
+        .title{
+            display:flex; align-items:center; gap:10px; font-weight:900; font-size:1rem; color:#204158;
+        }
+        .gicon{
+            width:22px; height:22px; border-radius:4px; object-fit:cover; border:1px solid var(--sky-200);
+        }
+        .badge{
+            padding:3px 8px; border-radius:999px; font-size:.72rem; font-weight:800;
+            border:1px solid var(--sky-300); color:#0369a1; background:linear-gradient(180deg, var(--sky-100), var(--sky-50));
+        }
+        .badge.success{ border-color:#86efac; color:#166534; background:linear-gradient(180deg, #dcfce7, #f0fdf4) }
+        .badge.warn{ border-color:#fde68a; color:#92400e; background:linear-gradient(180deg, #fef3c7, #fffbeb) }
+        .badge.error{ border-color:#fecaca; color:#7f1d1d; background:linear-gradient(180deg, #fee2e2, #fff1f2) }
+
+        .close{
+            border:1px solid #fecaca; background:#fff; color:#7f1d1d;
+            border-radius:10px; padding:6px 10px; cursor:pointer; font-weight:800;
+        }
+        .close:hover{ background:#ffe4e6 }
+
+        .card-body{ padding:12px 16px; color:var(--muted); font-size:.98rem }
+
+        .footer{
+            display:flex; align-items:center; gap:10px; justify-content:space-between;
+            padding:0 16px 12px 16px;
+        }
+        .countdown{
+            font-weight:800; color:#204158; font-variant-numeric: tabular-nums;
+        }
+
+        .progress{
+            height:6px; width:100%; background:var(--sky-100); border-radius:999px; overflow:hidden; margin:0 16px 12px;
+        }
+        .progress > i{
+            display:block; height:100%; width:0%;
+            background:linear-gradient(90deg, var(--sky-400), var(--sky-600));
+            animation-name: countdown;
+            animation-timing-function: linear;
+            animation-fill-mode: forwards;
+            animation-duration: 4000ms;
+        }
+        @keyframes countdown{ to{ width:100% } }
+
+        .card.success{ border-left:6px solid var(--success) }
+        .card.warn{ border-left:6px solid var(--warning) }
+        .card.error{ border-left:6px solid var(--danger) }
+        .card.info{ border-left:6px solid var(--sky-500) }
+
+        @media (max-height:500px){
+            .dockBR{ right:12px; bottom:12px }
+        }
+    </style>
+</head>
+<body>
+<div id="dockBR" class="dockBR" aria-live="polite" aria-atomic="true"></div>
+
+<script>
+    const { ipcRenderer } = require('electron');
+    const timersByCard = new WeakMap();
+
+    function showCard({ variant='info', title='Notificación', body='', duration=4000, countdownMs=0, icon=null } = {}){
+        const dock = document.getElementById('dockBR');
+        const card = document.createElement('div');
+        card.className = `card ${variant}`;
+
+        const badgeClass = variant === 'success' ? 'success' : variant === 'warn' ? 'warn' : variant === 'error' ? 'error' : '';
+        const badgeText  = variant === 'success' ? 'Éxito'   : variant === 'warn' ? 'Aviso' : variant === 'error' ? 'Error'   : 'Info';
+        const durMs = Math.max(1500, countdownMs || duration);
+
+        card.innerHTML = `
+              <div class="card-head">
+                <div class="title">
+                  ${icon ? `<img class="gicon" src="${icon}" alt="">` : ``}
+                  <span class="badge ${badgeClass}">${badgeText}</span>
+                  <span>${title}</span>
+                </div>
+                <button class="close" title="Cerrar">Cerrar</button>
+              </div>
+              <div class="card-body">${body}</div>
+              <div class="progress"><i></i></div>
+              <div class="footer">
+                <span></span>
+                <span class="countdown" id="countdownTxt">${countdownMs ? formatSecs(Math.ceil(countdownMs/1000)) : ''}</span>
+              </div>
+            `;
+
+        const bar = card.querySelector('.progress > i');
+        if (bar) {
+            bar.style.animationDuration = durMs + 'ms';
+            bar.style.animationName = 'countdown';
+        }
+
+        card.addEventListener('mouseenter', () => ipcRenderer.send('overlay:hover', true));
+        card.addEventListener('mouseleave', () => ipcRenderer.send('overlay:hover', false));
+
+        const btn = card.querySelector('.close');
+        btn && btn.addEventListener('click', () => removeCard(card));
+
+        const closeTimer = setTimeout(() => removeCard(card), durMs + 120);
+        timersByCard.set(card, { closeTimer });
+
+        if (countdownMs && countdownMs > 0) {
+            const txt = card.querySelector('#countdownTxt');
+            const t0 = performance.now();
+            const tick = () => {
+                const elapsed = performance.now() - t0;
+                const left = Math.max(0, countdownMs - elapsed);
+                if (txt) txt.textContent = formatSecs(Math.ceil(left/1000));
+                if (left <= 0) return;
+                const rafId = requestAnimationFrame(tick);
+                const obj = timersByCard.get(card) || {};
+                obj.rafId = rafId;
+                timersByCard.set(card, obj);
+            };
+            const rafId = requestAnimationFrame(tick);
+            const obj = timersByCard.get(card) || {};
+            obj.rafId = rafId;
+            timersByCard.set(card, obj);
+        }
+
+        dock.innerHTML = '';
+        dock.appendChild(card);
+    }
+
+    function formatSecs(s){
+        const ss = Math.max(0, s|0);
+        const m = Math.floor(ss/60);
+        const r = ss % 60;
+        return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`;
+    }
+
+    function removeCard(card){
+        if (!card) return;
+        const t = timersByCard.get(card) || {};
+        if (t.closeTimer) clearTimeout(t.closeTimer);
+        if (t.rafId) cancelAnimationFrame(t.rafId);
+        card.style.transition = 'opacity .15s ease, transform .2s ease';
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(6px) scale(.98)';
+        setTimeout(() => {
+            const parent = card.parentElement;
+            if (parent) parent.removeChild(card);
+            ipcRenderer.send('overlay:hover', false);
+        }, 160);
+    }
+
+    function clearAll(){
+        const dock = document.getElementById('dockBR');
+        [...dock.children].forEach(removeCard);
+        ipcRenderer.send('overlay:hover', false);
+    }
+
+    ipcRenderer.on('overlay:show', (_e, payload) => showCard(payload || {}));
+    ipcRenderer.on('overlay:clear', () => clearAll());
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') clearAll(); });
+</script>
+</body>
+</html>
