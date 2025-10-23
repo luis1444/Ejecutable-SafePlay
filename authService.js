@@ -1,4 +1,4 @@
-// authService.js (proceso main)
+// authService.js (CON VERIFICACIÓN DE CONTRASEÑA)
 let Store = require('electron-store');
 Store = Store?.default ?? Store;
 
@@ -7,7 +7,6 @@ try { keytar = require('keytar'); } catch (_) {}
 
 const store = new Store({ name: 'safeplay' });
 
-// fetch para Node si hiciera falta
 try {
     if (typeof fetch === 'undefined') {
         const nodeFetch = require('node-fetch');
@@ -16,7 +15,7 @@ try {
 } catch (_) {}
 
 /** CONFIG **/
-const USE_MOCK = false; // usamos backend real
+const USE_MOCK = false;
 const API_BASE_URL = process.env.API_BASE_URL || 'https://safeeplay.com';
 /************/
 
@@ -26,6 +25,7 @@ async function saveTokenSecure(token) {
     }
     store.set('session_token', token);
 }
+
 async function getTokenSecure() {
     if (keytar) {
         try {
@@ -35,6 +35,7 @@ async function getTokenSecure() {
     }
     return store.get('session_token', null);
 }
+
 async function clearTokenSecure() {
     if (keytar) {
         try { await keytar.deletePassword('SafePlay', 'session_token'); } catch (_) {}
@@ -73,7 +74,6 @@ async function loginRemote({ email, password }) {
     const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // tu web usa { identifier, password }
         body: JSON.stringify({ identifier: email, password })
     });
 
@@ -85,23 +85,53 @@ async function loginRemote({ email, password }) {
         throw err;
     }
 
-    // Si no trae user, lo construimos desde el JWT
     let user = data.user;
     if (!user) {
         const payload = decodeJwt(data.token) || {};
-        // Campos habituales en tu token de ejemplo: { id, username, iat, exp }
+        console.log('[Auth] JWT Payload:', payload);
         const id = payload.id ?? payload.userId ?? payload.sub ?? 'unknown';
         const username = payload.username ?? payload.name ?? 'Supervisor';
         user = {
             id,
             username,
             name: username,
-            email: null,        // si luego quieres, puedes hacer /api/auth/me para completarlo
-            role: 'supervisor', // por defecto
+            email: email, // Guardar el email usado para login
+            role: 'supervisor',
         };
+    } else if (!user.email) {
+        user.email = email; // Asegurar que tengamos el email
     }
 
+    console.log('[Auth] User después del login:', user);
     return { token: data.token, user };
+}
+
+/** 🔒 Verificar credenciales sin cambiar la sesión actual **/
+async function verifyCredentialsRemote(email, password) {
+    try {
+        const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identifier: email, password })
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        // Si el login es exitoso, las credenciales son válidas
+        if (res.ok && data?.token) {
+            return true;
+        }
+
+        return false;
+    } catch (error) {
+        console.error('[Auth] Error verificando credenciales:', error);
+        return false;
+    }
+}
+
+async function verifyCredentialsMock(email, password) {
+    await new Promise(r => setTimeout(r, 200));
+    return email?.endsWith('@safeplay.dev') && password === '123456';
 }
 
 const AuthService = {
@@ -111,50 +141,26 @@ const AuthService = {
         store.set('user', data.user);
         return data;
     },
+
     async logout() {
         await clearTokenSecure();
-        store.delete('user');            // ✅ usar delete()
-        store.delete('session_cookie');  // por si existía
+        store.delete('user');
+        store.delete('session_cookie');
     },
+
     async getSession() {
         const token = await getTokenSecure();
         const user = store.get('user', null);
         if (token && user) return { token, user };
         return null;
+    },
+
+    /** 🔒 Verificar contraseña del usuario actual **/
+    async verifyCredentials(email, password) {
+        return USE_MOCK
+            ? await verifyCredentialsMock(email, password)
+            : await verifyCredentialsRemote(email, password);
     }
 };
 
-async function loginRemote({ email, password }) {
-    const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: email, password })
-    });
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data?.token) {
-        const msg = data?.error || data?.message || `Respuesta de login inválida`;
-        const err = new Error(msg);
-        err.code = res.status;
-        throw err;
-    }
-
-    let user = data.user;
-    if (!user) {
-        const payload = decodeJwt(data.token) || {};
-        console.log('[Auth] JWT Payload:', payload); // ← AGREGAR ESTO
-        const id = payload.id ?? payload.userId ?? payload.sub ?? 'unknown';
-        const username = payload.username ?? payload.name ?? 'Supervisor';
-        user = {
-            id,
-            username,
-            name: username,
-            email: null,
-            role: 'supervisor',
-        };
-    }
-
-    console.log('[Auth] User después del login:', user); // ← AGREGAR ESTO
-    return { token: data.token, user };
-}
 module.exports = AuthService;

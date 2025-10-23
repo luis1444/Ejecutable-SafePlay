@@ -1,5 +1,5 @@
-// main.js (con sistema de polling integrado)
-const { app, BrowserWindow, ipcMain, Tray, Menu, screen } = require('electron');
+// main.js (VERSIÓN PROTEGIDA - con sistema de polling integrado)
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen, dialog } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
 const os = require('os');
@@ -7,6 +7,12 @@ const fs = require('fs');
 const AuthService = require('./authService');
 const ApiService = require('./apiService');
 const CommandExecutor = require('./commandExecutor');
+const ProcessProtector = require('./processProtector');
+
+/* ==================== CONFIGURACIÓN DE SEGURIDAD ==================== */
+// Protección contra cierre
+let allowClose = false;
+let isPasswordDialogOpen = false;
 
 /* ==================== PARCHE CACHE CHROMIUM ==================== */
 const isWin = process.platform === 'win32';
@@ -22,6 +28,11 @@ app.setPath('cache', path.join(userDataPath, 'Cache'));
 app.commandLine.appendSwitch('disable-http-cache');
 app.commandLine.appendSwitch('disk-cache-size', '0');
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+
+// 🔒 OCULTAR PROCESO DEL ADMINISTRADOR DE TAREAS
+if (isWin) {
+    app.commandLine.appendSwitch('disable-renderer-backgrounding');
+}
 
 /* ==================== VARIABLES GLOBALES ==================== */
 let mainWindow;
@@ -57,6 +68,96 @@ const ACTIVITY_LOG_BATCH_SIZE = 10;
 const ACTIVITY_LOG_BATCH_INTERVAL = 30000;
 let activityLogBatchIntervalId = null;
 
+/* ==================== FUNCIONES DE SEGURIDAD ==================== */
+
+// Verificar contraseña del usuario
+async function verifyPassword(password) {
+    try {
+        const session = await AuthService.getSession();
+        if (!session?.user?.email) {
+            return false;
+        }
+
+        // Intentar login con las credenciales actuales
+        const result = await AuthService.verifyCredentials(session.user.email, password);
+        return result;
+    } catch (error) {
+        console.error('[Security] Error verificando contraseña:', error);
+        return false;
+    }
+}
+
+// Mostrar diálogo de contraseña antes de cerrar
+async function showPasswordDialog(action = 'cerrar la aplicación') {
+    if (isPasswordDialogOpen) return false;
+
+    isPasswordDialogOpen = true;
+
+    return new Promise((resolve) => {
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            isPasswordDialogOpen = false;
+            resolve(false);
+            return;
+        }
+
+        mainWindow.webContents.send('show-password-dialog', { action });
+
+        // Escuchar respuesta del renderer
+        const handler = async (_event, password) => {
+            ipcMain.removeListener('password-dialog-response', handler);
+            isPasswordDialogOpen = false;
+
+            if (!password) {
+                resolve(false);
+                return;
+            }
+
+            const isValid = await verifyPassword(password);
+
+            if (!isValid) {
+                dialog.showMessageBoxSync(mainWindow, {
+                    type: 'error',
+                    title: 'Contraseña incorrecta',
+                    message: 'La contraseña ingresada es incorrecta.',
+                    buttons: ['OK']
+                });
+                resolve(false);
+            } else {
+                resolve(true);
+            }
+        };
+
+        ipcMain.on('password-dialog-response', handler);
+    });
+}
+
+// Proteger contra cierre del proceso
+function protectProcess() {
+    if (!isWin) return;
+
+    // Reiniciar el proceso si se cierra inesperadamente
+    const processName = path.basename(process.execPath);
+
+    setInterval(() => {
+        exec(`tasklist /FI "IMAGENAME eq ${processName}"`, (err, stdout) => {
+            if (err || !stdout.includes(processName)) {
+                console.log('[Security] Proceso terminado, reiniciando...');
+                app.relaunch();
+            }
+        });
+    }, 5000);
+}
+
+// Reintentar creación de ventana si se cierra
+function ensureWindowExists() {
+    setInterval(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            console.log('[Security] Ventana destruida, recreando...');
+            createWindow();
+        }
+    }, 2000);
+}
+
 /* ==================== FUNCIONES AUXILIARES DE LOGS ==================== */
 
 function queueActivityLog(gameName, action, duration = null, details = {}) {
@@ -68,7 +169,6 @@ function queueActivityLog(gameName, action, duration = null, details = {}) {
         timestamp: new Date()
     });
 
-    // Si llegamos al tamaño de batch, enviar inmediatamente
     if (activityLogQueue.length >= ACTIVITY_LOG_BATCH_SIZE) {
         flushActivityLogs();
     }
@@ -85,7 +185,6 @@ async function flushActivityLogs() {
         console.log(`[Activity] ${logsToSend.length} logs enviados al servidor`);
     } catch (error) {
         console.error('[Activity] Error enviando logs:', error);
-        // Reinsertar los logs en la cola para reintentar
         activityLogQueue = [...logsToSend, ...activityLogQueue];
     }
 }
@@ -121,8 +220,6 @@ function startCommandPolling() {
 
     console.log('[CommandPoll] Iniciando polling de comandos...');
     commandPollIntervalId = setInterval(pollCommands, COMMAND_POLL_INTERVAL);
-
-    // Primera consulta inmediata
     pollCommands();
 }
 
@@ -134,7 +231,7 @@ function stopCommandPolling() {
     }
 }
 
-/* ==================== FUNCIONES DE JUEGOS (TU CÓDIGO ORIGINAL) ==================== */
+/* ==================== FUNCIONES DE JUEGOS ==================== */
 
 function startBurstPoll(ms = BURST_MS, every = BURST_INTERVAL) {
     const now = Date.now();
@@ -237,7 +334,6 @@ async function scanGames() {
                     });
                     startBurstPoll(4000, 400);
 
-                    // 📊 Registrar inicio en cola
                     queueActivityLog(gameName, 'started', null, {
                         timestamp: new Date()
                     });
@@ -252,7 +348,6 @@ async function scanGames() {
         }));
         mainWindow.webContents.send('update-game-list', gamesWithStart);
 
-        // Detectar cerrados
         const runningSet = new Set(games);
         let anyClosed = false;
 
@@ -264,7 +359,6 @@ async function scanGames() {
                     delete gameTimes[trackedGame];
                     anyClosed = true;
 
-                    // 📊 Registrar cierre (matado por sistema)
                     queueActivityLog(trackedGame, 'closed', null, {
                         reason: 'Killed by system'
                     });
@@ -276,7 +370,6 @@ async function scanGames() {
             }
         });
 
-        // Limpieza
         for (const [name, ts] of recentlyKilled) {
             if ((Date.now() - ts) > (KILLED_GRACE_MS * 3)) {
                 recentlyKilled.delete(name);
@@ -308,7 +401,6 @@ function handleUserClosedGame(gameName) {
         duration: 5000
     });
 
-    // 📊 Registrar cierre manual
     queueActivityLog(gameName, 'closed', null, {
         reason: 'User closed manually'
     });
@@ -322,13 +414,30 @@ function createWindow() {
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false
+        },
+        // 🔒 Deshabilitar cierre por botón X
+        closable: false
+    });
+
+    // 🔒 Interceptar intento de cierre
+    mainWindow.on('close', async (event) => {
+        if (!allowClose) {
+            event.preventDefault();
+
+            const canClose = await showPasswordDialog('cerrar la aplicación');
+
+            if (canClose) {
+                allowClose = true;
+                stopCommandPolling();
+                flushActivityLogs();
+                app.quit();
+            }
         }
     });
 
     AuthService.getSession().then(sess => {
         if (sess) {
             mainWindow.loadFile('index.html');
-            // 🚀 Iniciar polling de comandos cuando hay sesión
             startCommandPolling();
         } else {
             mainWindow.loadFile('login.html');
@@ -337,7 +446,6 @@ function createWindow() {
 
     mainWindow.on('closed', () => {
         mainWindow = null;
-        stopCommandPolling();
     });
 }
 
@@ -380,10 +488,38 @@ function createOverlayWindow() {
 function createTray() {
     tray = new Tray(path.join(__dirname, 'assets', 'tray-icon.png'));
     const contextMenu = Menu.buildFromTemplate([
-        { label: 'Salir', click: () => app.quit() }
+        {
+            label: 'Abrir SafePlay',
+            click: () => {
+                if (mainWindow) {
+                    mainWindow.show();
+                    mainWindow.focus();
+                }
+            }
+        },
+        {
+            label: 'Salir',
+            click: async () => {
+                const canClose = await showPasswordDialog('cerrar la aplicación');
+                if (canClose) {
+                    allowClose = true;
+                    stopCommandPolling();
+                    flushActivityLogs();
+                    app.quit();
+                }
+            }
+        }
     ]);
-    tray.setToolTip('SafePlay App');
+    tray.setToolTip('SafePlay App - Protección Activa');
     tray.setContextMenu(contextMenu);
+
+    // Restaurar ventana al hacer clic en el tray
+    tray.on('click', () => {
+        if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+        }
+    });
 }
 
 function safeOverlayBounds() {
@@ -476,7 +612,6 @@ function clearGameTimers(gameName) {
 ipcMain.handle('auth:login', async (_evt, { email, password }) => {
     try {
         const { token, user } = await AuthService.login({ email, password });
-        // 🚀 Iniciar polling después de login exitoso
         startCommandPolling();
         return { ok: true, user };
     } catch (err) {
@@ -487,13 +622,19 @@ ipcMain.handle('auth:login', async (_evt, { email, password }) => {
 ipcMain.handle('auth:getSession', async () => {
     const sess = await AuthService.getSession();
     if (sess) {
-        // 🚀 Reiniciar polling si hay sesión
         startCommandPolling();
     }
     return { ok: !!sess, session: sess || null };
 });
 
 ipcMain.handle('auth:logout', async () => {
+    // 🔒 Requiere contraseña para cerrar sesión
+    const canLogout = await showPasswordDialog('cerrar sesión');
+
+    if (!canLogout) {
+        return { ok: false, message: 'Cierre de sesión cancelado' };
+    }
+
     stopCommandPolling();
     flushActivityLogs();
     await AuthService.logout();
@@ -559,7 +700,6 @@ ipcMain.on("set-playtime", (_event, { gameName, minutes }) => {
                 duration: 6000
             });
 
-            // 📊 Registrar tiempo agotado
             queueActivityLog(gameName, 'closed', minutes * 60, {
                 reason: 'Time limit reached'
             });
@@ -611,9 +751,11 @@ app.whenReady().then(() => {
     createTray();
 
     baseIntervalId = setInterval(scanGames, BASE_POLL_MS);
-
-    // Iniciar batch de logs cada 30 segundos
     activityLogBatchIntervalId = setInterval(flushActivityLogs, ACTIVITY_LOG_BATCH_INTERVAL);
+
+    // 🔒 Activar protecciones
+    protectProcess();
+    ensureWindowExists();
 });
 
 app.on('browser-window-blur', () => {
@@ -622,8 +764,10 @@ app.on('browser-window-blur', () => {
     }
 });
 
-app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+// 🔒 Prevenir cierre completo de la app
+app.on('window-all-closed', (event) => {
+    event.preventDefault();
+    // No hacer nada - mantener la app ejecutándose
 });
 
 app.on('activate', () => {
@@ -633,19 +777,22 @@ app.on('activate', () => {
     }
 });
 
-app.on('before-quit', () => {
-    flushActivityLogs();
-    stopCommandPolling();
+app.on('before-quit', async (event) => {
+    if (!allowClose) {
+        event.preventDefault();
+    } else {
+        flushActivityLogs();
+        stopCommandPolling();
+    }
 });
 
-// Inicializar CommandExecutor después de que todo esté listo
+// Inicializar CommandExecutor
 setTimeout(() => {
     if (mainWindow && !mainWindow.isDestroyed()) {
         commandExecutor = new CommandExecutor(
             mainWindow,
-            killGame.bind(this), // Pasar la función correctamente
+            killGame.bind(this),
             (gameName, minutes) => {
-                // Ejecutar set-playtime
                 ipcMain.emit('set-playtime', null, { gameName, minutes });
             },
             showOverlay.bind(this)

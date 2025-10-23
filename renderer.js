@@ -1,4 +1,4 @@
-// renderer.js
+// renderer.js (CON PROTECCIÓN DE CONTRASEÑA)
 const { ipcRenderer } = require('electron');
 
 // ==================== Drawer + Sesión + Logout ====================
@@ -55,16 +55,130 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     })();
 
-    // Logout
+    // 🔒 Logout con confirmación
     logoutBtn && logoutBtn.addEventListener('click', async () => {
         try {
-            await ipcRenderer.invoke('auth:logout');
-        } finally {
-            closeDrawer();
-            location.replace('login.html');
+            const result = await ipcRenderer.invoke('auth:logout');
+
+            if (result.ok) {
+                closeDrawer();
+                location.replace('login.html');
+            } else {
+                // Usuario canceló o contraseña incorrecta
+                console.log('Logout cancelado');
+            }
+        } catch (error) {
+            console.error('Error en logout:', error);
         }
     });
+
+    // 🔒 Crear modal de contraseña dinámicamente
+    ensurePasswordModal();
 });
+
+// ==================== Modal de Contraseña ====================
+function ensurePasswordModal() {
+    let passwordModal = document.getElementById('passwordModal');
+    if (passwordModal) return passwordModal;
+
+    const tpl = document.createElement('div');
+    tpl.innerHTML = `
+    <div id="passwordModal" class="modal password-modal" aria-hidden="true" role="dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 class="modal-title">🔒 Autenticación requerida</h2>
+        </div>
+        <p id="passwordModalMessage" class="modal-sub">Por favor, ingresa tu contraseña para continuar.</p>
+
+        <div class="password-field-wrapper">
+          <label class="field password-field" for="passwordInput">
+            <span>🔑</span>
+            <input type="password" id="passwordInput" placeholder="Contraseña" autocomplete="current-password"/>
+          </label>
+        </div>
+
+        <div class="modal-actions">
+          <button id="confirmPasswordBtn" class="confirm-button">Confirmar</button>
+          <button id="cancelPasswordBtn" class="cancel-button">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  `.trim();
+    document.body.appendChild(tpl.firstElementChild);
+    return document.getElementById('passwordModal');
+}
+
+// Escuchar solicitud de contraseña desde el proceso principal
+ipcRenderer.on('show-password-dialog', (_event, { action }) => {
+    openPasswordDialog(action);
+});
+
+function openPasswordDialog(action = 'realizar esta acción') {
+    const passwordModal = ensurePasswordModal();
+    const passwordModalMessage = document.getElementById('passwordModalMessage');
+    const passwordInput = document.getElementById('passwordInput');
+    const confirmPasswordBtn = document.getElementById('confirmPasswordBtn');
+    const cancelPasswordBtn = document.getElementById('cancelPasswordBtn');
+
+    if (!passwordModal || !passwordInput || !confirmPasswordBtn || !cancelPasswordBtn) {
+        console.warn('Modal de contraseña no encontrado');
+        return;
+    }
+
+    passwordModalMessage.textContent = `Ingresa tu contraseña para ${action}:`;
+    passwordInput.value = '';
+
+    // Mostrar modal
+    passwordModal.classList.add('is-open');
+    passwordModal.style.display = '';
+    passwordModal.setAttribute('aria-hidden', 'false');
+
+    // Enfocar input
+    setTimeout(() => passwordInput.focus(), 100);
+
+    // Handler para confirmar
+    const confirmHandler = () => {
+        const password = passwordInput.value.trim();
+        ipcRenderer.send('password-dialog-response', password);
+        closePasswordDialog();
+    };
+
+    // Handler para cancelar
+    const cancelHandler = () => {
+        ipcRenderer.send('password-dialog-response', null);
+        closePasswordDialog();
+    };
+
+    // Asignar eventos
+    confirmPasswordBtn.onclick = confirmHandler;
+    cancelPasswordBtn.onclick = cancelHandler;
+
+    // Permitir Enter para confirmar
+    passwordInput.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+            confirmHandler();
+        } else if (e.key === 'Escape') {
+            cancelHandler();
+        }
+    };
+
+    // Prevenir cierre con clic afuera (esto es una acción crítica)
+    passwordModal.onclick = (e) => {
+        if (e.target === passwordModal) {
+            // No cerrar - es una acción de seguridad
+            passwordInput.focus();
+        }
+    };
+}
+
+function closePasswordDialog() {
+    const passwordModal = document.getElementById('passwordModal');
+    if (!passwordModal) return;
+
+    passwordModal.classList.remove('is-open');
+    passwordModal.style.display = 'none';
+    passwordModal.setAttribute('aria-hidden', 'true');
+}
 
 // ==================== Timer Modal (auto-inyección si falta) ====================
 let currentGameForTimer = null;
@@ -74,7 +188,6 @@ function ensureTimerModal() {
     let timerModal = document.getElementById('timerModal');
     if (timerModal) return timerModal;
 
-    // Crear modal dinámicamente si no existe
     const tpl = document.createElement('div');
     tpl.innerHTML = `
     <div id="timerModal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="timerTitle">
@@ -125,13 +238,11 @@ function openTimerModal(gameName, friendlyName){
     hoursInput.value = "";
     minutesInput.value = "";
 
-    // Mostrar modal
     timerModal.classList.add('is-open');
-    timerModal.style.display = ''; // lo maneja .is-open en CSS
+    timerModal.style.display = '';
     timerModal.setAttribute('aria-hidden', 'false');
     modalOpen = true;
 
-    // Evitar handlers duplicados reasignando onclick
     confirmTimerBtn.onclick = () => {
         const hours = parseInt(hoursInput.value) || 0;
         const minutes = parseInt(minutesInput.value) || 0;
@@ -146,7 +257,6 @@ function openTimerModal(gameName, friendlyName){
 
     cancelTimerBtn.onclick = () => closeTimerModal();
 
-    // Cerrar si clic afuera
     timerModal.onclick = (e) => {
         if (e.target === timerModal) closeTimerModal();
     };
@@ -161,7 +271,6 @@ function closeTimerModal(){
     modalOpen = false;
 }
 
-// Cerrar modal con ESC
 window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && modalOpen) closeTimerModal();
 });
@@ -207,7 +316,6 @@ function renderGames() {
     });
 }
 
-// Delegación de eventos (un solo listener para toda la lista)
 gameListContainer.addEventListener('click', (e) => {
     const btn = e.target.closest('button');
     if (!btn) return;
@@ -231,7 +339,6 @@ ipcRenderer.on('game-closed', (_e, { name, by }) => {
     console.log(`Juego cerrado (${by}): ${name}`);
 });
 
-// Re-render cada segundo (solo contenido)
 setInterval(renderGames, 1000);
 
 ipcRenderer.on('update-game-list', (_event, games) => {
@@ -240,7 +347,6 @@ ipcRenderer.on('update-game-list', (_event, games) => {
     renderGames();
 });
 
-// Logs opcionales (overlay ya lo muestra desde main)
 ipcRenderer.on('game-blocked', (_event, result) => console.log(result.message));
 ipcRenderer.on('playtime-set', (_event, { gameName, minutes }) => console.log(`Tiempo para ${gameName}: ${minutes} min.`));
 ipcRenderer.on('time-up', (_event, gameName) => console.log(`Tiempo agotado para ${gameName}.`));
