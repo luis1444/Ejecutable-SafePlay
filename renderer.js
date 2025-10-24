@@ -98,8 +98,8 @@ function ensurePasswordModal() {
         </div>
 
         <div class="modal-actions">
-          <button id="confirmPasswordBtn" class="confirm-button">Confirmar</button>
           <button id="cancelPasswordBtn" class="cancel-button">Cancelar</button>
+          <button id="confirmPasswordBtn" class="confirm-button">✓ Confirmar</button>
         </div>
       </div>
     </div>

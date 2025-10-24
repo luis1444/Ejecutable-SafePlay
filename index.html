@@ -114,24 +114,96 @@
     .spinner{ width:26px; height:26px; border-radius:999px; border:3px solid var(--sky-200); border-top-color: var(--sky-500); animation: spin .9s linear infinite; display:inline-block; vertical-align:middle; margin-right:8px }
     @keyframes spin{to{transform: rotate(360deg)}}
 
-    /* Modal */
+    /* Modal Base */
     .modal{ display:none; position:fixed; inset:0; z-index:1100; background:rgba(2,23,43,.45); backdrop-filter: blur(2px); }
     .modal.is-open{display:grid; place-items:center; animation: fadeIn .25s ease}
     @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-    .modal-content{ width:min(640px, 95vw); background: rgba(255,255,255,.9); border:1px solid var(--sky-200); border-radius:20px; padding:28px; box-shadow: 0 30px 80px rgba(3,105,161,.25); transform: scale(.98); animation: pop .2s ease forwards; text-align:left; }
+    .modal-content{ width:min(640px, 95vw); background: rgba(255,255,255,.95); border:1px solid var(--sky-200); border-radius:20px; padding:28px; box-shadow: 0 30px 80px rgba(3,105,161,.25); transform: scale(.98); animation: pop .2s ease forwards; text-align:left; }
     @keyframes pop{to{transform:scale(1)}}
     .modal-header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px}
     .modal-title{font-size:1.5rem; font-weight:900; color:#204158}
-    .modal-sub{color:#5a6c7d; margin-bottom:16px; font-size:1.1rem}
+    .modal-sub{color:#5a6c7d; margin-bottom:16px; font-size:1.05rem}
     .modal-grid{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:16px 0 12px }
     .field{ background:#fff; border:2px solid var(--sky-200); border-radius:12px; padding:12px 14px; display:flex; align-items:center; gap:12px; transition: .25s ease; }
     .field:focus-within{border-color: var(--sky-400); box-shadow: 0 0 0 6px rgba(56,189,248,.12)}
     .field input{ width:100%; border:none; outline:none; font-size:1.2rem; font-weight:800; color:#0b4666 }
-    .modal-actions{display:flex; justify-content:flex-end; gap:12px; margin-top:12px}
-    .close-btn{ background:#fff; border:2px solid #fecaca; color:#7f1d1d; border-radius:12px; padding:12px 16px; cursor:pointer; font-weight:800; transition:.2s ease }
+    .modal-actions{display:flex; justify-content:flex-end; gap:12px; margin-top:20px}
+    .close-btn{ background:#fff; border:2px solid #fecaca; color:#7f1d1d; border-radius:12px; padding:12px 16px; cursor:pointer; font-weight:800; transition:.2s ease; font-size:.95rem }
     .close-btn:hover{background:#ffe4e6}
     #confirmTimerBtn.timer-button{min-width:160px; padding:12px 16px}
     #cancelTimerBtn.close-btn{min-width:140px}
+
+    /* 🔒 Modal de Contraseña */
+    .password-modal .modal-content {
+      max-width: 500px;
+      border: 2px solid #ef4444;
+      background: rgba(255,255,255,.98);
+    }
+    .password-modal .modal-title {
+      color: #dc2626;
+      font-size: 1.4rem;
+    }
+    .password-field-wrapper {
+      margin: 20px 0;
+    }
+    .password-field {
+      border: 2px solid var(--sky-300);
+      background: #fff;
+    }
+    .password-field input {
+      font-size: 1.1rem;
+      letter-spacing: 0.5px;
+    }
+    .password-field:focus-within {
+      border-color: #ef4444;
+      box-shadow: 0 0 0 6px rgba(239,68,68,.12);
+    }
+
+    /* Botones del modal de contraseña */
+    .confirm-button {
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      padding: 12px 28px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all .2s ease;
+      box-shadow: 0 6px 20px rgba(34,197,94,.35);
+      font-size: .95rem;
+      min-width: 140px;
+    }
+    .confirm-button:hover {
+      box-shadow: 0 12px 30px rgba(34,197,94,.45);
+      transform: translateY(-2px);
+      filter: brightness(1.05);
+    }
+    .confirm-button:active {
+      transform: translateY(0);
+      box-shadow: 0 4px 15px rgba(34,197,94,.35);
+    }
+
+    .cancel-button {
+      background: #fff;
+      border: 2px solid #e5e7eb;
+      color: #6b7280;
+      border-radius: 12px;
+      padding: 12px 28px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all .2s ease;
+      font-size: .95rem;
+      min-width: 140px;
+    }
+    .cancel-button:hover {
+      background: #f9fafb;
+      border-color: #d1d5db;
+      color: #374151;
+      transform: translateY(-1px);
+    }
+    .cancel-button:active {
+      transform: translateY(0);
+    }
 
     :focus-visible{outline: 3px solid var(--sky-400); outline-offset: 2px}
     @media (prefers-color-scheme: dark){
@@ -141,6 +213,17 @@
       .drawer{background:#0f1f2b; border-color:#143447}
       .drawer-head{border-color:#143447}
       .drawer-foot{border-color:#143447}
+      .password-modal .modal-content {
+        background: rgba(15,31,43,.98);
+        border-color: #ef4444;
+      }
+      .password-field {
+        background: #0a1420;
+        border-color: #1e3a52;
+      }
+      .password-field input {
+        color: #e8eef4;
+      }
     }
 
     .hidden{display:none !important}
@@ -155,9 +238,8 @@
     </a>
 
     <div class="nav-actions">
-      <span class="chip">Estado: Online</span>
+      <span class="chip">🔒 Protegido</span>
 
-      <!-- Botón que abre la barra lateral -->
       <button id="accountBtn" class="account-btn" title="Cuenta">
         <span class="account-avatar">S</span>
         Cuenta
@@ -206,7 +288,7 @@
   </div>
 </main>
 
-<!-- Modal Timer (presente en HTML; si se borra, renderer lo crea) -->
+<!-- Modal Timer -->
 <div id="timerModal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="timerTitle">
   <div class="modal-content">
     <div class="modal-header">
@@ -232,7 +314,6 @@
   </div>
 </div>
 
-<!-- Un solo script: toda la lógica vive en renderer.js -->
 <script src="renderer.js"></script>
 </body>
 </html>

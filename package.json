@@ -31,7 +31,9 @@
     "win": {
       "target": "nsis",
       "icon": "assets/icon.png",
-      "signingHashAlgorithms": ["sha256"],
+      "signingHashAlgorithms": [
+        "sha256"
+      ],
       "certificateFile": null
     },
     "nsis": {

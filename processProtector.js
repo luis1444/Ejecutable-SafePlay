@@ -1,4 +1,4 @@
-// processProtector.js - Protección adicional del proceso
+// processProtector.js - Protección avanzada del proceso
 const { exec } = require('child_process');
 const path = require('path');
 const os = require('os');
@@ -7,85 +7,163 @@ class ProcessProtector {
     constructor() {
         this.isWindows = os.platform() === 'win32';
         this.processName = path.basename(process.execPath);
-        this.checkInterval = null;
+        this.monitorInterval = null;
         this.restartAttempts = 0;
-        this.maxRestartAttempts = 5;
+        this.maxRestartAttempts = 3;
+        this.isActive = false;
     }
 
     /**
      * Inicia la protección del proceso
      */
     start() {
-        if (!this.isWindows) {
-            console.log('[ProcessProtector] Solo disponible en Windows');
+        if (this.isActive) {
+            console.log('[ProcessProtector] Ya está activo');
             return;
         }
 
+        this.isActive = true;
         console.log('[ProcessProtector] Iniciando protección del proceso...');
 
-        // Cambiar prioridad del proceso a alta
-        this.setPriority('high');
+        if (this.isWindows) {
+            this.protectWindowsProcess();
+            this.hideFromTaskManager();
+        }
 
-        // Monitorear que el proceso siga ejecutándose
         this.startMonitoring();
-
-        // Renombrar ventana para dificultar identificación
-        this.obfuscateWindow();
     }
 
     /**
-     * Establece la prioridad del proceso
+     * Detiene la protección del proceso
      */
-    setPriority(priority = 'high') {
-        const pid = process.pid;
-        const priorityMap = {
-            'low': '/LOW',
-            'belownormal': '/BELOWNORMAL',
-            'normal': '/NORMAL',
-            'abovenormal': '/ABOVENORMAL',
-            'high': '/HIGH',
-            'realtime': '/REALTIME'
-        };
+    stop() {
+        this.isActive = false;
 
-        const priorityFlag = priorityMap[priority] || '/HIGH';
+        if (this.monitorInterval) {
+            clearInterval(this.monitorInterval);
+            this.monitorInterval = null;
+        }
 
-        exec(`wmic process where ProcessId=${pid} CALL setpriority ${priorityFlag.replace('/', '')}`, (err) => {
-            if (err) {
-                console.error('[ProcessProtector] Error estableciendo prioridad:', err);
-            } else {
-                console.log(`[ProcessProtector] Prioridad establecida a: ${priority}`);
-            }
-        });
+        console.log('[ProcessProtector] Protección detenida');
     }
 
     /**
-     * Monitorea que el proceso principal siga ejecutándose
+     * Oculta el proceso del Administrador de Tareas (Windows)
+     */
+    hideFromTaskManager() {
+        if (!this.isWindows) return;
+
+        try {
+            // Cambiar la prioridad del proceso para hacerlo menos visible
+            exec(`wmic process where processid=${process.pid} CALL setpriority "idle"`, (error) => {
+                if (error) {
+                    console.warn('[ProcessProtector] No se pudo cambiar prioridad:', error.message);
+                }
+            });
+
+            // Intentar ocultar la ventana del proceso de la lista de tareas
+            // Esto requiere modificaciones adicionales en el BrowserWindow
+            console.log('[ProcessProtector] Proceso configurado para ser menos visible');
+        } catch (error) {
+            console.error('[ProcessProtector] Error ocultando proceso:', error);
+        }
+    }
+
+    /**
+     * Protege el proceso contra terminación forzada (Windows)
+     */
+    protectWindowsProcess() {
+        if (!this.isWindows) return;
+
+        try {
+            // Establecer el proceso como crítico del sistema (requiere privilegios de admin)
+            const script = `
+                $signature = @"
+                [DllImport("ntdll.dll", SetLastError=true)]
+                public static extern void RtlSetProcessIsCritical(UInt32 v1, UInt32 v2, UInt32 v3);
+"@
+                $ntdll = Add-Type -MemberDefinition $signature -Name NtDll -Namespace Win32 -PassThru
+                $ntdll::RtlSetProcessIsCritical(1, 0, 0)
+            `;
+
+            // ADVERTENCIA: Esto puede hacer que el sistema se reinicie si se fuerza el cierre
+            // Solo descomentar en entornos de producción controlados
+            /*
+            exec(`powershell -Command "${script}"`, (error) => {
+                if (error) {
+                    console.warn('[ProcessProtector] No se pudo marcar como crítico (requiere admin)');
+                } else {
+                    console.log('[ProcessProtector] Proceso marcado como crítico del sistema');
+                }
+            });
+            */
+
+        } catch (error) {
+            console.error('[ProcessProtector] Error en protección Windows:', error);
+        }
+    }
+
+    /**
+     * Previene la terminación del proceso
+     */
+    preventTermination() {
+        if (!this.isWindows) return;
+
+        // Interceptar señales de terminación
+        process.on('SIGTERM', () => {
+            console.log('[ProcessProtector] SIGTERM bloqueado');
+        });
+
+        process.on('SIGINT', () => {
+            console.log('[ProcessProtector] SIGINT bloqueado');
+        });
+
+        // En Windows, interceptar eventos de cierre
+        if (this.isWindows) {
+            process.on('exit', (code) => {
+                if (this.isActive && code !== 0) {
+                    console.log('[ProcessProtector] Intento de cierre no autorizado detectado');
+                    // Reiniciar la aplicación
+                    this.restartApplication();
+                }
+            });
+        }
+    }
+
+    /**
+     * Monitorea el estado del proceso
      */
     startMonitoring() {
-        this.checkInterval = setInterval(() => {
-            this.checkProcess();
-        }, 3000);
+        const checkInterval = 3000; // Verificar cada 3 segundos
+
+        this.monitorInterval = setInterval(() => {
+            if (!this.isActive) {
+                clearInterval(this.monitorInterval);
+                return;
+            }
+
+            this.checkProcessHealth();
+        }, checkInterval);
     }
 
     /**
-     * Verifica si el proceso sigue activo
+     * Verifica la salud del proceso
      */
-    checkProcess() {
-        exec(`tasklist /FI "PID eq ${process.pid}" /NH`, (err, stdout) => {
-            if (err || !stdout.includes(this.processName)) {
-                console.log('[ProcessProtector] Proceso terminado detectado');
-                this.handleProcessTermination();
-            } else {
-                // Reset contador si el proceso está OK
-                this.restartAttempts = 0;
+    checkProcessHealth() {
+        if (!this.isWindows) return;
+
+        exec(`tasklist /FI "PID eq ${process.pid}" /FO CSV /NH`, (error, stdout) => {
+            if (error || !stdout.includes(this.processName)) {
+                console.log('[ProcessProtector] Proceso en riesgo, tomando medidas...');
+                this.handleProcessThreat();
             }
         });
     }
 
     /**
-     * Maneja la terminación inesperada del proceso
+     * Maneja amenazas al proceso
      */
-    handleProcessTermination() {
+    handleProcessThreat() {
         if (this.restartAttempts >= this.maxRestartAttempts) {
             console.error('[ProcessProtector] Máximo de intentos de reinicio alcanzado');
             return;
@@ -94,84 +172,51 @@ class ProcessProtector {
         this.restartAttempts++;
         console.log(`[ProcessProtector] Intento de reinicio ${this.restartAttempts}/${this.maxRestartAttempts}`);
 
-        // Intentar reiniciar la aplicación
-        const appPath = process.execPath;
-        exec(`start "" "${appPath}"`, (err) => {
-            if (err) {
-                console.error('[ProcessProtector] Error al reiniciar:', err);
-            }
-        });
+        // Esperar un momento antes de reiniciar
+        setTimeout(() => {
+            this.restartApplication();
+        }, 1000);
     }
 
     /**
-     * Ofusca el título de la ventana
+     * Reinicia la aplicación
      */
-    obfuscateWindow() {
-        // Cambiar el nombre del proceso en la lista de tareas (solo visual)
-        try {
-            if (process.title) {
-                process.title = 'Windows Security Service';
-            }
-        } catch (err) {
-            console.error('[ProcessProtector] Error ofuscando ventana:', err);
-        }
+    restartApplication() {
+        const { app } = require('electron');
+
+        console.log('[ProcessProtector] Reiniciando aplicación...');
+        app.relaunch();
+        app.exit(0);
     }
 
     /**
-     * Prevenir que el proceso sea terminado fácilmente
+     * Detecta intentos de kill desde el Administrador de Tareas
      */
-    preventTermination() {
-        // Capturar señales de terminación
-        const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-
-        signals.forEach(signal => {
-            process.on(signal, () => {
-                console.log(`[ProcessProtector] Intento de terminación bloqueado: ${signal}`);
-                // No hacer nada - prevenir cierre
-            });
-        });
-
-        // Manejar errores no capturados
-        process.on('uncaughtException', (err) => {
-            console.error('[ProcessProtector] Error no capturado:', err);
-            // Continuar ejecución en lugar de cerrar
-        });
-
-        process.on('unhandledRejection', (reason, promise) => {
-            console.error('[ProcessProtector] Promesa rechazada no manejada:', reason);
-            // Continuar ejecución
-        });
-    }
-
-    /**
-     * Ocultar de herramientas de monitoreo comunes
-     */
-    hideFromMonitoring() {
+    detectTaskManagerKill() {
         if (!this.isWindows) return;
 
-        // Intentar ocultar de Process Explorer y herramientas similares
-        // Nota: Esto tiene limitaciones y puede requerir privilegios de administrador
-        const hideScript = `
-            $process = Get-Process -Id ${process.pid}
-            $process.PriorityClass = 'High'
-        `;
-
-        exec(`powershell -Command "${hideScript}"`, (err) => {
-            if (err) {
-                console.error('[ProcessProtector] Error ocultando proceso:', err);
-            }
-        });
+        // Monitorear si el Administrador de Tareas está abierto
+        setInterval(() => {
+            exec('tasklist /FI "IMAGENAME eq Taskmgr.exe"', (error, stdout) => {
+                if (!error && stdout.includes('Taskmgr.exe')) {
+                    console.log('[ProcessProtector] Administrador de Tareas detectado');
+                    // Aquí podrías implementar medidas adicionales
+                }
+            });
+        }, 5000);
     }
 
     /**
-     * Detiene la protección
+     * Ofuscar el nombre del proceso (cambiar título de la ventana)
      */
-    stop() {
-        if (this.checkInterval) {
-            clearInterval(this.checkInterval);
-            this.checkInterval = null;
+    obfuscateProcess(mainWindow) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            // Cambiar el título para que sea menos identificable
+            mainWindow.setTitle('Sistema de Windows');
+
+            // Establecer como aplicación en segundo plano
+            mainWindow.setSkipTaskbar(false);
         }
-        console.log('[ProcessProtector] Protección detenida');
     }
 }
 

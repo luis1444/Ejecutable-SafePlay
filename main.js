@@ -1,18 +1,49 @@
-// main.js (VERSIÓN PROTEGIDA - con sistema de polling integrado)
+// main.js - SafePlay con protección de seguridad CORREGIDO
 const { app, BrowserWindow, ipcMain, Tray, Menu, screen, dialog } = require('electron');
 const { exec } = require('child_process');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+
+// Importar servicios
 const AuthService = require('./authService');
 const ApiService = require('./apiService');
 const CommandExecutor = require('./commandExecutor');
-const ProcessProtector = require('./processProtector');
 
-/* ==================== CONFIGURACIÓN DE SEGURIDAD ==================== */
-// Protección contra cierre
-let allowClose = false;
+// Importar módulos de seguridad (opcionales)
+let ProcessProtector = null;
+let securityConfig = null;
+
+try {
+    ProcessProtector = require('./processProtector');
+    console.log('[Security] ProcessProtector cargado');
+} catch (err) {
+    console.warn('[Security] processProtector.js no encontrado - usando protección básica');
+}
+
+try {
+    securityConfig = require('./securityConfig');
+    console.log('[Security] Configuración personalizada cargada');
+} catch (err) {
+    console.warn('[Security] securityConfig.js no encontrado - usando configuración por defecto');
+    securityConfig = {
+        requirePasswordToClose: true,
+        requirePasswordToLogout: true,
+        enableProcessProtection: true,
+        processCheckInterval: 3000,
+        autoRecreateWindow: true,
+        windowCheckInterval: 2000,
+        debugMode: false,
+        verboseSecurityLogs: true,
+        commandExecutorDelay: 1500
+    };
+}
+
+/* ==================== VARIABLES DE SEGURIDAD ==================== */
+let allowClose = false; // 🔒 Variable crítica que autoriza el cierre
 let isPasswordDialogOpen = false;
+let processProtector = null;
+let isQuitting = false; // 🔒 Nueva variable para controlar el proceso de salida
 
 /* ==================== PARCHE CACHE CHROMIUM ==================== */
 const isWin = process.platform === 'win32';
@@ -29,7 +60,6 @@ app.commandLine.appendSwitch('disable-http-cache');
 app.commandLine.appendSwitch('disk-cache-size', '0');
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 
-// 🔒 OCULTAR PROCESO DEL ADMINISTRADOR DE TAREAS
 if (isWin) {
     app.commandLine.appendSwitch('disable-renderer-backgrounding');
 }
@@ -41,7 +71,6 @@ let tray;
 let gameTimes = {};
 let playTimers = {};
 
-// Polling de juegos
 const BASE_POLL_MS = 1000;
 const BURST_MS = 10000;
 const BURST_INTERVAL = 500;
@@ -49,12 +78,10 @@ let baseIntervalId = null;
 let burstIntervalId = null;
 let burstUntil = 0;
 
-// Polling de comandos remotos
 const COMMAND_POLL_INTERVAL = 5000;
 let commandPollIntervalId = null;
 let commandExecutor = null;
 
-// Anti-duplicación
 const recentlyKilled = new Map();
 const KILLED_GRACE_MS = 3000;
 const recentlyStarted = new Map();
@@ -62,7 +89,6 @@ const START_OVERLAY_COOLDOWN_MS = 5000;
 let lastOverlayKey = '';
 let lastOverlayTs = 0;
 
-// Cola de logs para enviar en batch
 let activityLogQueue = [];
 const ACTIVITY_LOG_BATCH_SIZE = 10;
 const ACTIVITY_LOG_BATCH_INTERVAL = 30000;
@@ -70,15 +96,18 @@ let activityLogBatchIntervalId = null;
 
 /* ==================== FUNCIONES DE SEGURIDAD ==================== */
 
-// Verificar contraseña del usuario
 async function verifyPassword(password) {
+    if (securityConfig.debugMode) {
+        console.log('[Security] Modo DEBUG - Contraseña aceptada automáticamente');
+        return true;
+    }
+
     try {
         const session = await AuthService.getSession();
         if (!session?.user?.email) {
             return false;
         }
 
-        // Intentar login con las credenciales actuales
         const result = await AuthService.verifyCredentials(session.user.email, password);
         return result;
     } catch (error) {
@@ -87,8 +116,13 @@ async function verifyPassword(password) {
     }
 }
 
-// Mostrar diálogo de contraseña antes de cerrar
 async function showPasswordDialog(action = 'cerrar la aplicación') {
+    if (securityConfig.debugMode ||
+        (action.includes('cerrar') && !securityConfig.requirePasswordToClose) ||
+        (action.includes('sesión') && !securityConfig.requirePasswordToLogout)) {
+        return true;
+    }
+
     if (isPasswordDialogOpen) return false;
 
     isPasswordDialogOpen = true;
@@ -102,7 +136,6 @@ async function showPasswordDialog(action = 'cerrar la aplicación') {
 
         mainWindow.webContents.send('show-password-dialog', { action });
 
-        // Escuchar respuesta del renderer
         const handler = async (_event, password) => {
             ipcMain.removeListener('password-dialog-response', handler);
             isPasswordDialogOpen = false;
@@ -131,34 +164,110 @@ async function showPasswordDialog(action = 'cerrar la aplicación') {
     });
 }
 
-// Proteger contra cierre del proceso
-function protectProcess() {
-    if (!isWin) return;
+// 🔒 FUNCIÓN MEJORADA: Cierre autorizado de la aplicación
+async function closeApplication() {
+    if (isQuitting) return; // Evitar múltiples intentos
 
-    // Reiniciar el proceso si se cierra inesperadamente
+    isQuitting = true;
+    allowClose = true;
+
+    console.log('[Security] Iniciando cierre autorizado de la aplicación...');
+
+    // Detener servicios
+    stopCommandPolling();
+    await flushActivityLogs();
+
+    if (processProtector) {
+        processProtector.stop();
+    }
+
+    // Limpiar intervalos
+    if (baseIntervalId) clearInterval(baseIntervalId);
+    if (burstIntervalId) clearInterval(burstIntervalId);
+    if (activityLogBatchIntervalId) clearInterval(activityLogBatchIntervalId);
+
+    // Destruir ventanas
+    try {
+        if (overlayWindow && !overlayWindow.isDestroyed()) {
+            overlayWindow.destroy();
+        }
+    } catch (e) {
+        console.error('[Security] Error al destruir overlay:', e);
+    }
+
+    try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.destroy();
+        }
+    } catch (e) {
+        console.error('[Security] Error al destruir mainWindow:', e);
+    }
+
+    // Salir de la aplicación
+    app.quit();
+}
+
+// 🔒 NUEVA FUNCIÓN: Verificar si se puede cerrar
+async function canCloseApplication() {
+    const session = await AuthService.getSession();
+
+    // Sin sesión activa, permitir cierre directo
+    if (!session) {
+        console.log('[Security] Sin sesión activa - permitiendo cierre');
+        return true;
+    }
+
+    // Con sesión activa, verificar contraseña
+    console.log('[Security] Sesión activa - requiriendo contraseña');
+    const canClose = await showPasswordDialog('cerrar la aplicación');
+
+    return canClose;
+}
+
+// 🔒 Función de protección del proceso (SIN recreación automática)
+function protectProcess() {
+    if (!isWin || !securityConfig.enableProcessProtection) return;
+
     const processName = path.basename(process.execPath);
 
     setInterval(() => {
+        // 🔒 NO verificar si se está cerrando o se autorizó el cierre
+        if (allowClose || isQuitting) {
+            return;
+        }
+
         exec(`tasklist /FI "IMAGENAME eq ${processName}"`, (err, stdout) => {
             if (err || !stdout.includes(processName)) {
-                console.log('[Security] Proceso terminado, reiniciando...');
+                if (securityConfig.verboseSecurityLogs) {
+                    console.log('[Security] Proceso terminado de forma no autorizada, reiniciando...');
+                }
                 app.relaunch();
+                app.exit();
             }
         });
-    }, 5000);
+    }, securityConfig.processCheckInterval);
 }
 
-// Reintentar creación de ventana si se cierra
+// 🔒 Función mejorada: Recrear ventana solo cuando es necesario
 function ensureWindowExists() {
+    if (!securityConfig.autoRecreateWindow) return;
+
     setInterval(() => {
+        // 🔒 NO recrear si se está cerrando o se autorizó el cierre
+        if (allowClose || isQuitting) {
+            return;
+        }
+
         if (!mainWindow || mainWindow.isDestroyed()) {
-            console.log('[Security] Ventana destruida, recreando...');
+            if (securityConfig.verboseSecurityLogs) {
+                console.log('[Security] Ventana destruida sin autorización, recreando...');
+            }
             createWindow();
         }
-    }, 2000);
+    }, securityConfig.windowCheckInterval);
 }
 
-/* ==================== FUNCIONES AUXILIARES DE LOGS ==================== */
+/* ==================== FUNCIONES DE LOGS ==================== */
 
 function queueActivityLog(gameName, action, duration = null, details = {}) {
     activityLogQueue.push({
@@ -189,14 +298,11 @@ async function flushActivityLogs() {
     }
 }
 
-/* ==================== FUNCIONES DE POLLING DE COMANDOS ==================== */
+/* ==================== POLLING DE COMANDOS ==================== */
 
 async function pollCommands() {
     const session = await AuthService.getSession();
-    if (!session?.token) {
-        console.log('[CommandPoll] No hay sesión activa');
-        return;
-    }
+    if (!session?.token) return;
 
     try {
         const commands = await ApiService.fetchPendingCommands();
@@ -406,6 +512,59 @@ function handleUserClosedGame(gameName) {
     });
 }
 
+function killGame(gameName) {
+    const platform = os.platform();
+    let command = platform === 'win32'
+        ? `taskkill /IM "${gameName}.exe" /F`
+        : `pkill -f ${gameName}`;
+
+    exec(command, (error) => {
+        if (error) {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('game-blocked', {
+                    name: gameName,
+                    success: false,
+                    message: `❌ No se pudo cerrar ${gameName}.`
+                });
+            }
+            showOverlay({
+                variant: 'error',
+                title: 'No se pudo cerrar el juego',
+                body: `Intento fallido al cerrar <b>${gameName}</b>.`,
+                duration: 5000
+            });
+        } else {
+            recentlyKilled.set(gameName, Date.now());
+            clearGameTimers(gameName);
+            startBurstPoll(4000, 400);
+
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('game-blocked', {
+                    name: gameName,
+                    success: true,
+                    message: `✅ Juego cerrado: ${gameName}`
+                });
+            }
+            showOverlay({
+                variant: 'success',
+                title: 'Juego cerrado',
+                body: `Se cerró <b>${gameName}</b> por límite o bloqueo.`,
+                duration: 4500
+            });
+        }
+    });
+}
+
+function clearGameTimers(gameName) {
+    const t = playTimers[gameName];
+    if (!t) return;
+    try { if (t.kill) clearTimeout(t.kill); } catch(_) {}
+    try { if (t.warn) clearTimeout(t.warn); } catch(_) {}
+    delete playTimers[gameName];
+}
+
+/* ==================== VENTANAS ==================== */
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 980,
@@ -414,27 +573,30 @@ function createWindow() {
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false
-        },
-        // 🔒 Deshabilitar cierre por botón X
-        closable: false
-    });
-
-    // 🔒 Interceptar intento de cierre
-    mainWindow.on('close', async (event) => {
-        if (!allowClose) {
-            event.preventDefault();
-
-            const canClose = await showPasswordDialog('cerrar la aplicación');
-
-            if (canClose) {
-                allowClose = true;
-                stopCommandPolling();
-                flushActivityLogs();
-                app.quit();
-            }
         }
     });
 
+    // 🔒 EVENTO CLOSE MEJORADO - Prevenir cierre hasta verificar contraseña
+    mainWindow.on('close', async (event) => {
+        // Si ya se autorizó el cierre, permitir
+        if (allowClose || isQuitting) {
+            return;
+        }
+
+        // Prevenir el cierre por defecto
+        event.preventDefault();
+
+        // Verificar si se puede cerrar (pide contraseña si hay sesión)
+        const canClose = await canCloseApplication();
+
+        if (canClose) {
+            // Autorizar y cerrar
+            await closeApplication();
+        }
+        // Si no se autoriza, simplemente no hace nada (ventana permanece abierta)
+    });
+
+    // Cargar la interfaz correspondiente
     AuthService.getSession().then(sess => {
         if (sess) {
             mainWindow.loadFile('index.html');
@@ -500,12 +662,10 @@ function createTray() {
         {
             label: 'Salir',
             click: async () => {
-                const canClose = await showPasswordDialog('cerrar la aplicación');
+                const canClose = await canCloseApplication();
+
                 if (canClose) {
-                    allowClose = true;
-                    stopCommandPolling();
-                    flushActivityLogs();
-                    app.quit();
+                    await closeApplication();
                 }
             }
         }
@@ -513,8 +673,15 @@ function createTray() {
     tray.setToolTip('SafePlay App - Protección Activa');
     tray.setContextMenu(contextMenu);
 
-    // Restaurar ventana al hacer clic en el tray
+    // 🔒 Clic en tray muestra la ventana
     tray.on('click', () => {
+        if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+        }
+    });
+
+    tray.on('double-click', () => {
         if (mainWindow) {
             mainWindow.show();
             mainWindow.focus();
@@ -556,58 +723,7 @@ function showOverlay(payload) {
     } catch (_) {}
 }
 
-function killGame(gameName) {
-    const platform = os.platform();
-    let command = platform === 'win32'
-        ? `taskkill /IM "${gameName}.exe" /F`
-        : `pkill -f ${gameName}`;
-
-    exec(command, (error) => {
-        if (error) {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('game-blocked', {
-                    name: gameName,
-                    success: false,
-                    message: `❌ No se pudo cerrar ${gameName}.`
-                });
-            }
-            showOverlay({
-                variant: 'error',
-                title: 'No se pudo cerrar el juego',
-                body: `Intento fallido al cerrar <b>${gameName}</b>.`,
-                duration: 5000
-            });
-        } else {
-            recentlyKilled.set(gameName, Date.now());
-            clearGameTimers(gameName);
-            startBurstPoll(4000, 400);
-
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('game-blocked', {
-                    name: gameName,
-                    success: true,
-                    message: `✅ Juego cerrado: ${gameName}`
-                });
-            }
-            showOverlay({
-                variant: 'success',
-                title: 'Juego cerrado',
-                body: `Se cerró <b>${gameName}</b> por límite o bloqueo.`,
-                duration: 4500
-            });
-        }
-    });
-}
-
-function clearGameTimers(gameName) {
-    const t = playTimers[gameName];
-    if (!t) return;
-    try { if (t.kill) clearTimeout(t.kill); } catch(_) {}
-    try { if (t.warn) clearTimeout(t.warn); } catch(_) {}
-    delete playTimers[gameName];
-}
-
-/* ==================== IPC AUTH ==================== */
+/* ==================== IPC HANDLERS ==================== */
 
 ipcMain.handle('auth:login', async (_evt, { email, password }) => {
     try {
@@ -628,7 +744,6 @@ ipcMain.handle('auth:getSession', async () => {
 });
 
 ipcMain.handle('auth:logout', async () => {
-    // 🔒 Requiere contraseña para cerrar sesión
     const canLogout = await showPasswordDialog('cerrar sesión');
 
     if (!canLogout) {
@@ -636,7 +751,7 @@ ipcMain.handle('auth:logout', async () => {
     }
 
     stopCommandPolling();
-    flushActivityLogs();
+    await flushActivityLogs();
     await AuthService.logout();
     return { ok: true };
 });
@@ -657,8 +772,6 @@ ipcMain.handle('overlay:clear', () => {
     clearOverlay();
     return { ok: true };
 });
-
-/* ==================== IPC JUEGOS ==================== */
 
 ipcMain.on('block-game', (_event, gameName) => {
     clearGameTimers(gameName);
@@ -753,21 +866,45 @@ app.whenReady().then(() => {
     baseIntervalId = setInterval(scanGames, BASE_POLL_MS);
     activityLogBatchIntervalId = setInterval(flushActivityLogs, ACTIVITY_LOG_BATCH_INTERVAL);
 
-    // 🔒 Activar protecciones
-    protectProcess();
-    ensureWindowExists();
+    // 🔒 Bloquear atajos de teclado globalmente
+    const { globalShortcut } = require('electron');
+
+    globalShortcut.register('Alt+F4', async () => {
+        const canClose = await canCloseApplication();
+
+        if (canClose) {
+            await closeApplication();
+        }
+    });
+
+    globalShortcut.register('CommandOrControl+W', () => {
+        console.log('[Security] Ctrl+W bloqueado');
+        return false;
+    });
+
+    globalShortcut.register('CommandOrControl+Q', async () => {
+        const canClose = await canCloseApplication();
+
+        if (canClose) {
+            await closeApplication();
+        }
+    });
+
+    console.log('[Security] Atajos de teclado protegidos (Alt+F4, Ctrl+W, Ctrl+Q)');
 });
 
-app.on('browser-window-blur', () => {
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-        try { overlayWindow.setAlwaysOnTop(true, 'screen-saver'); } catch (_) {}
-    }
-});
-
-// 🔒 Prevenir cierre completo de la app
+// 🔒 Prevenir que se cierren todas las ventanas
 app.on('window-all-closed', (event) => {
     event.preventDefault();
-    // No hacer nada - mantener la app ejecutándose
+
+    // Solo permitir si está en proceso de cierre autorizado
+    if (!allowClose && !isQuitting) {
+        console.log('[Security] Intento de cerrar todas las ventanas bloqueado');
+        // Recrear ventana si es necesario
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            createWindow();
+        }
+    }
 });
 
 app.on('activate', () => {
@@ -777,26 +914,71 @@ app.on('activate', () => {
     }
 });
 
+// 🔒 EVENTO BEFORE-QUIT MEJORADO - Control completo del cierre
 app.on('before-quit', async (event) => {
-    if (!allowClose) {
-        event.preventDefault();
-    } else {
-        flushActivityLogs();
-        stopCommandPolling();
+    // Si ya se está cerrando, permitir
+    if (isQuitting || allowClose) {
+        return;
+    }
+
+    // Prevenir el cierre por defecto
+    event.preventDefault();
+
+    // Verificar si se puede cerrar
+    const canClose = await canCloseApplication();
+
+    if (canClose) {
+        // Autorizar y cerrar
+        await closeApplication();
     }
 });
 
-// Inicializar CommandExecutor
+app.on('browser-window-blur', () => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+        try { overlayWindow.setAlwaysOnTop(true, 'screen-saver'); } catch (_) {}
+    }
+});
+
+// 🔒 Inicialización de protecciones con delay
 setTimeout(() => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-        commandExecutor = new CommandExecutor(
-            mainWindow,
-            killGame.bind(this),
-            (gameName, minutes) => {
-                ipcMain.emit('set-playtime', null, { gameName, minutes });
-            },
-            showOverlay.bind(this)
-        );
-        console.log('[Main] CommandExecutor inicializado');
+        try {
+            commandExecutor = new CommandExecutor(
+                mainWindow,
+                killGame,
+                (gameName, minutes) => {
+                    ipcMain.emit('set-playtime', null, { gameName, minutes });
+                },
+                showOverlay
+            );
+            console.log('[Main] CommandExecutor inicializado');
+        } catch (error) {
+            console.error('[Main] Error al inicializar CommandExecutor:', error);
+        }
     }
-}, 1500);
+
+    if (securityConfig.enableProcessProtection && ProcessProtector) {
+        try {
+            processProtector = new ProcessProtector();
+            processProtector.start();
+            processProtector.preventTermination();
+            console.log('[Security] Protección del proceso activada');
+        } catch (error) {
+            console.error('[Security] Error al inicializar protección:', error);
+        }
+    }
+
+    try {
+        if (securityConfig.enableProcessProtection) {
+            protectProcess();
+        }
+
+        if (securityConfig.autoRecreateWindow) {
+            ensureWindowExists();
+        }
+
+        console.log('[Security] Sistema de protección inicializado');
+    } catch (error) {
+        console.error('[Security] Error en protecciones:', error);
+    }
+}, securityConfig.commandExecutorDelay);
