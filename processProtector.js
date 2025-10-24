@@ -1,7 +1,8 @@
 // processProtector.js - Protección avanzada del proceso
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 
 class ProcessProtector {
     constructor() {
@@ -11,6 +12,9 @@ class ProcessProtector {
         this.restartAttempts = 0;
         this.maxRestartAttempts = 3;
         this.isActive = false;
+        this.guardianProcess = null;
+        this.heartbeatFile = path.join(os.tmpdir(), 'safeplay-heartbeat.txt');
+        this.heartbeatInterval = null;
     }
 
     /**

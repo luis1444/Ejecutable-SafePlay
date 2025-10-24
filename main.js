@@ -173,13 +173,15 @@ async function closeApplication() {
 
     console.log('[Security] Iniciando cierre autorizado de la aplicación...');
 
+    // 🔒 IMPORTANTE: Detener protecciones ANTES de detener servicios
+    if (processProtector) {
+        processProtector.stop();
+        console.log('[Security] ProcessProtector detenido');
+    }
+
     // Detener servicios
     stopCommandPolling();
     await flushActivityLogs();
-
-    if (processProtector) {
-        processProtector.stop();
-    }
 
     // Limpiar intervalos
     if (baseIntervalId) clearInterval(baseIntervalId);
@@ -202,6 +204,9 @@ async function closeApplication() {
     } catch (e) {
         console.error('[Security] Error al destruir mainWindow:', e);
     }
+
+    // Esperar un momento para que el guardián detecte el cierre autorizado
+    await new Promise(resolve => setTimeout(resolve, 500));
 
     // Salir de la aplicación
     app.quit();
