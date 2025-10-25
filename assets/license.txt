@@ -1,0 +1,50 @@
+ACUERDO DE LICENCIA DE USUARIO FINAL (EULA)
+SafePlay - Control Parental
+
+Copyright (c) 2025 Equipo SafePlay
+
+TÉRMINOS Y CONDICIONES DE USO
+
+1. ACEPTACIÓN DE LOS TÉRMINOS
+Al instalar, copiar o utilizar el software SafePlay ("el Software"), usted acepta estar legalmente vinculado por los términos de este acuerdo. Si no está de acuerdo con estos términos, no instale ni utilice el Software.
+
+2. CONCESIÓN DE LICENCIA
+Se le concede una licencia limitada, no exclusiva e intransferible para instalar y utilizar el Software en sus dispositivos personales con fines de control parental.
+
+3. RESTRICCIONES
+Usted NO puede:
+- Modificar, descompilar, realizar ingeniería inversa o desensamblar el Software
+- Alquilar, arrendar, prestar, vender, redistribuir o sublicenciar el Software
+- Eliminar o alterar cualquier aviso de propiedad en el Software
+- Utilizar el Software para fines ilegales o no autorizados
+
+4. PROPIEDAD INTELECTUAL
+El Software y todos los derechos de propiedad intelectual relacionados son y permanecerán como propiedad exclusiva de Equipo SafePlay.
+
+5. RECOPILACIÓN DE DATOS
+El Software puede recopilar información sobre el uso de aplicaciones y tiempo de juego con fines de control parental. Esta información se utiliza únicamente para proporcionar las funcionalidades del servicio.
+
+6. LIMITACIÓN DE RESPONSABILIDAD
+EL SOFTWARE SE PROPORCIONA "TAL CUAL", SIN GARANTÍAS DE NINGÚN TIPO, EXPRESAS O IMPLÍCITAS. EN NINGÚN CASO LOS AUTORES SERÁN RESPONSABLES DE DAÑOS DIRECTOS, INDIRECTOS, INCIDENTALES, ESPECIALES O CONSECUENTES.
+
+7. USO PARA CONTROL PARENTAL
+Este software está diseñado específicamente para ser utilizado por padres o tutores legales con el fin de monitorear y gestionar el uso de videojuegos de sus hijos menores de edad.
+
+8. TERMINACIÓN
+Esta licencia es efectiva hasta que se termine. Sus derechos bajo esta licencia terminarán automáticamente sin previo aviso si no cumple con alguno de estos términos.
+
+9. LEY APLICABLE
+Este acuerdo se regirá e interpretará de acuerdo con las leyes de Colombia. Política de Tratamiento de Datos Personales
+Conforme a la Ley 1581 de 2012 y el Decreto 1377 de 2013 de Colombia
+Habeas Data y Autorización de Tratamiento de Datos
+SafePlay, en cumplimiento de la Ley 1581 de 2012 de Protección de Datos Personales de Colombia, informa:
+
+10. ACUERDO COMPLETO
+Este acuerdo constituye el acuerdo completo entre usted y Equipo SafePlay con respecto al Software.
+
+Al hacer clic en "Acepto" o al instalar el Software, usted reconoce que ha leído este acuerdo, lo entiende y acepta estar sujeto a sus términos y condiciones.
+
+---
+Para preguntas o soporte, contacte a:  soporte@safeeplay.com
+Teléfono: +57 322 468 7627
+Última actualización: Octubre 2025

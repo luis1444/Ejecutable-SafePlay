@@ -1,44 +1,81 @@
 {
-  "name": "ejecutablesafeplay",
-  "version": "1.0.1",
+  "name": "safeplay",
+  "version": "1.0.0",
+  "description": "Aplicación de control parental SafePlay para monitoreo y gestión de tiempo de videojuegos.",
+  "author": "Equipo SafePlay",
+  "license": "MIT",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "dist": "electron-builder --publish never",
     "build": "electron-builder"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "SafePlay - Supervisor de juegos",
-  "devDependencies": {
-    "electron": "^38.0.0",
-    "electron-builder": "^25.0.0"
-  },
+  "keywords": [
+    "safeplay",
+    "control parental",
+    "electron",
+    "desktop app",
+    "videojuegos"
+  ],
   "dependencies": {
-    "electron-store": "^10.1.0",
+    "electron-store": "^8.1.0",
     "express": "^5.1.0",
     "keytar": "^7.9.0",
     "node-fetch": "^3.3.2",
     "node-windows": "^1.0.0-beta.8",
     "ps-list": "^8.1.1"
   },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^25.0.0"
+  },
   "build": {
-    "appId": "com.safeplay.app",
+    "appId": "com.safeplay.desktop",
     "productName": "SafePlay",
     "directories": {
+      "buildResources": "assets",
       "output": "dist"
     },
+    "files": [
+      "**/*",
+      "!dist/**/*",
+      "!.git/**/*",
+      "!*.md"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/",
+        "to": "assets/",
+        "filter": [
+          "icon.ico",
+          "installer_sidebar.bmp",
+          "uninstaller_sidebar.bmp"
+        ]
+      }
+    ],
+    "asar": false,
     "win": {
-      "target": "nsis",
-      "icon": "assets/icon.png",
-      "signingHashAlgorithms": [
-        "sha256"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64", "ia32"]
+        }
       ],
-      "certificateFile": null
+      "icon": "assets/icon.ico"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SafePlay",
+      "uninstallDisplayName": "Desinstalar SafePlay",
+      "artifactName": "SafePlay-Setup-${version}.exe",
+      "installerSidebar": "assets/installer_sidebar.bmp",
+      "uninstallerSidebar": "assets/uninstaller_sidebar.bmp",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "license": "license.txt"
     }
   }
 }
