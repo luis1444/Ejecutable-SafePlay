@@ -571,10 +571,15 @@ function clearGameTimers(gameName) {
 /* ==================== VENTANAS ==================== */
 
 function createWindow() {
+    // Determinar qué icono usar según el entorno
+    const iconPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'assets', 'icon.ico')
+        : path.join(__dirname, 'assets', 'icon.ico');
+
     mainWindow = new BrowserWindow({
         width: 980,
         height: 700,
-        icon: path.join(__dirname, 'assets', 'icon.png'),
+        icon: iconPath, // ✅ Usa ICO
         webPreferences: {
             nodeIntegration: true,
             contextIsolation: false
